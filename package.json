@@ -1,0 +1,26 @@
+{
+  "name": "templates",
+  "version": "0.0.0",
+  "private": true,
+  "bin": {
+    "templates": "src/cli.ts"
+  },
+  "type": "module",
+  "scripts": {
+    "probe": "bun src/probe.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "lint": "oxlint",
+    "format": "oxfmt",
+    "format:check": "oxfmt --check"
+  },
+  "dependencies": {
+    "csv-parse": "^7.0.3"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.4.4",
+    "oxfmt": "^0.75.0",
+    "oxlint": "^1.90.0",
+    "typescript": "^7.0.2"
+  }
+}

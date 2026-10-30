@@ -1,0 +1,10 @@
+[tools]
+bun = "latest"
+
+[tasks.install]
+description = "Install the locked Bun dependency tree"
+run = "bun install --frozen-lockfile"
+
+[tasks.check]
+description = "Typecheck, lint, check formatting and run the tests"
+run = ["bun run typecheck", "bun run lint", "bun run format:check", "bun run test"]
