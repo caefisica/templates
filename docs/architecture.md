@@ -1,0 +1,57 @@
+# Architecture
+
+The CLI runs in Bun. The work on a design runs inside a browser tab: each
+backend function is sent to the page as source text over the Chrome DevTools
+Protocol and calls the plugin API there. `figma` is the Figma editor's API, and
+`globalThis.ɵcontext` is the Penpot workspace's. Data crosses the boundary as
+JSON, with bytes as base64.
+
+## One render
+
+`templates render template.json --data rows.csv --on <penpot url>`:
+
+1. [src/cli.ts](../src/cli.ts) reads the template and the rows.
+2. [src/data.ts](../src/data.ts) checks the columns against the fields, names
+   each output file, and turns each row into a `Variant`: a map from layer path
+   to a text or an image's bytes.
+3. [src/url.ts](../src/url.ts) parses the URL into a `Target`: Figma or Penpot,
+   the file, and the frame or page when the URL names one.
+4. [src/backend.ts](../src/backend.ts) finds a tab showing that file, or opens
+   one, through [src/cdp.ts](../src/cdp.ts). It waits until the plugin API is on
+   the page and returns a `Backend`, which offers the same calls for both tools.
+5. `templateFrame` in the CLI finds the template's frame by id on its own
+   design, or by name on another.
+6. The backend sends four variants at a time to `penpotRender` in
+   [src/penpot/page.ts](../src/penpot/page.ts), or `figmaRender` in
+   [src/figma/page.ts](../src/figma/page.ts). The page function copies the
+   frame, sets each field's layers, exports the copy and deletes it. It returns
+   the exports as base64.
+7. The CLI writes each export to `--out` as its batch arrives.
+
+`pages`, `layers` and `check` take steps 3 to 5 and call `pages` or `layers` on
+the backend. [src/template.ts](../src/template.ts) turns layers into fields for
+`init` and compares them for `check`.
+
+## Copy
+
+`copy` reads a Figma frame with `readFigma` in
+[src/figma/read.ts](../src/figma/read.ts), which returns a `Design`: the
+tool-neutral tree in [src/model.ts](../src/model.ts) plus its images and SVGs.
+The CLI passes it to `writePenpot` in
+[src/penpot/write.ts](../src/penpot/write.ts), which builds the board.
+
+## Core data
+
+| Type       | File                                  | Holds                                          |
+| ---------- | ------------------------------------- | ---------------------------------------------- |
+| `Target`   | [src/url.ts](../src/url.ts)           | Tool, file, and frame or page of a design URL. |
+| `Layer`    | [src/design.ts](../src/design.ts)     | A text or image layer's path, value and count. |
+| `Template` | [src/template.ts](../src/template.ts) | The design URL, the frame, and the fields.     |
+| `Variant`  | [src/design.ts](../src/design.ts)     | One row's values by layer path.                |
+| `Design`   | [src/model.ts](../src/model.ts)       | A frame's full tree for `copy`.                |
+
+## Investigation
+
+[src/probe.ts](../src/probe.ts) runs a script from `probes/` in a tab and prints
+[src/sketch.ts](../src/sketch.ts)'s short outline of the result. See
+[probe.md](probe.md).
