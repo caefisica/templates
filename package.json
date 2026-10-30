@@ -2,6 +2,8 @@
   "name": "templates",
   "version": "0.0.0",
   "private": true,
+  "license": "MIT",
+  "repository": "github:caefisica/templates",
   "bin": {
     "templates": "src/cli.ts"
   },
