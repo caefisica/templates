@@ -1,0 +1,61 @@
+diff --git a/render-wasm/src/shapes.rs b/render-wasm/src/shapes.rs
+index 6a157a1..001d3ad 100644
+--- a/render-wasm/src/shapes.rs
++++ b/render-wasm/src/shapes.rs
+@@ -1152,22 +1152,47 @@ impl Shape {
+ 
+     /// Bounds for a headless export rooted at this shape.
+     ///
+-    /// Frames keep the classic board-box crop of overflowing children, but
+-    /// still expand by their own strokes / drop shadows / layer blur so those
+-    /// effects are not clipped (parity with single-export `extrect` for the
+-    /// board itself). Other shapes use full [`Self::extrect`].
++    /// A frame measures as Penpot's exporter does (`get-object-bounds`): its
++    /// board box, grown by its own strokes, drop shadows and layer blur, joined
++    /// with every visible descendant an unclipped frame or unmasked group shows.
++    /// Other shapes use full [`Self::extrect`].
+     pub fn export_root_bounds(&self, tree: ShapesPoolRef, scale: f32) -> math::Rect {
+         if matches!(self.shape_type, Type::Frame(_)) {
+-            let mut bounds = self.own_extrect_bounds();
+-            if !self.transform.is_identity() {
+-                bounds.transform_mut(&self.centered_transform());
+-            }
+-            bounds.to_rect()
++            let mut rect = self.export_own_rect();
++            self.join_export_children(&mut rect, tree);
++            rect
+         } else {
+             self.extrect(tree, scale)
+         }
+     }
+ 
++    /// World-space geometry with strokes, drop shadows and blur. A text counts
++    /// its box, not its laid-out glyphs, which run a little taller.
++    fn export_own_rect(&self) -> math::Rect {
++        let base = if matches!(self.shape_type, Type::Text(_)) {
++            Bounds::from_rect(&self.selrect)
++        } else {
++            self.own_base_bounds()
++        };
++        let mut bounds = self.expand_own_bounds(base, true);
++        if !self.transform.is_identity() {
++            bounds.transform_mut(&self.centered_transform());
++        }
++        bounds.to_rect()
++    }
++
++    fn join_export_children(&self, rect: &mut math::Rect, tree: ShapesPoolRef) {
++        if self.clip_content || matches!(self.shape_type, Type::Group(Group { masked: true })) {
++            return;
++        }
++        for child in self.children.iter().filter_map(|id| tree.get(id)) {
++            if !child.hidden {
++                rect.join(child.export_own_rect());
++                child.join_export_children(rect, tree);
++            }
++        }
++    }
++
+     /// The shape's own geometry bounds, before stroke/shadow/blur margins.
+     fn own_base_bounds(&self) -> Bounds {
+         let shape = self;
