@@ -469,28 +469,42 @@
   the most of `lines` on the pixel row of their stored `:target`, then
   nearest it, then nearest their pitches rounded up. A half-pixel step
   cannot move a line a whole row, so a line may take a pixel the next line
-  gives back. Where heights tie, as in a centered one-line box, the
-  rounded-up pitch is the one render-wasm centers as the exporter does. Both renderers draw a line on the whole pixel nearest its
-  baseline, so a line whose baselines differ by a fraction still lands on the
-  same row when both round alike. Skia centers a line's content in its height
-  and puts the target `:offset` below that center, and render-wasm offsets
-  the lines by the vertical align of the box height less theirs. A line with
-  no target draws nothing and only spaces the others. Targets are measured
-  from the board top, and heights from the box top, which sits `shift` below
-  it."
+  gives back. Where heights tie, the one nearest `prefer` wins: the
+  rounded-up pitch, which render-wasm centers as the exporter does. Both
+  renderers draw a line on the whole pixel nearest its baseline, so a line
+  whose baselines differ by a fraction still lands on the same row when both
+  round alike. Skia centers a line's content in its height and puts the
+  target `:offset` below that center, and render-wasm offsets the lines by
+  the vertical align of the box height less theirs. A line with no target
+  draws nothing and only spaces the others. Targets are measured from the
+  board top, and heights from the box top, which sits `shift` below it.
+
+  No height moves a lone line in a centered or bottom box, so such a line
+  is aligned to the top instead, with heights up to four pixels either side
+  of the one that keeps its center. Returns {:heights :valign}."
   [lines box-height valign shift scale]
-  (let [row     #(js/Math.round (* % scale))
+  (let [lone?   (and (= 1 (count lines)) (:target (first lines)) (contains? #{"center" "bottom"} valign))
+        start   (fn [valign total] (case valign "bottom" (- box-height total) "center" (/ (- box-height total) 2) 0))
+        center2 (when lone?
+                  (let [n (js/Math.ceil (:pitch (first lines)))]
+                    (+ (* 2 (start valign n)) n)))
+        valign  (if lone? "top" valign)
+        row     #(js/Math.round (* % scale))
         options (map (fn [{:keys [pitch]}]
-                       (distinct (map #(max 1 %) (range (dec (js/Math.floor pitch)) (+ 2 (js/Math.ceil pitch))))))
+                       (distinct (map #(max 1 %)
+                                      (if lone?
+                                        (range (- (js/Math.floor center2) 4) (+ (js/Math.ceil center2) 5))
+                                        (range (dec (js/Math.floor pitch)) (+ 2 (js/Math.ceil pitch)))))))
                      lines)
+        prefer  (fn [pitch] (or center2 (js/Math.ceil pitch)))
         miss    (fn [top n {:keys [target offset pitch]}]
-                  (+ (* 1e-6 (abs (- n (js/Math.ceil pitch))))
+                  (+ (* 1e-6 (abs (- n (prefer pitch))))
                      (if target
                        (let [s (+ shift top (/ n 2) offset)]
                          (+ (abs (- (row s) (row target))) (* 0.001 (abs (- s target)))))
                        0)))
         fit     (fn [total]
-                  (let [start (case valign "bottom" (- box-height total) "center" (/ (- box-height total) 2) 0)
+                  (let [start (start valign total)
                         step  (fn [states [line ns]]
                                 (reduce-kv
                                  (fn [out top [cost heights]]
@@ -502,10 +516,11 @@
                                            out ns))
                                  {} states))]
                     (get (reduce step {0 [0 []]} (map vector lines options)) total)))]
-    (->> (range (apply + (map first options)) (inc (apply + (map last options))))
-         (keep fit)
-         (apply min-key first)
-         second)))
+    {:heights (->> (range (apply + (map first options)) (inc (apply + (map last options))))
+                   (keep fit)
+                   (apply min-key first)
+                   second)
+     :valign  valign}))
 
 (defn- line-target
   "Where the exporter draws the line on the board, as {:target :offset} for
@@ -561,32 +576,55 @@
   pitch. Each leaf's line height carries the line's height, and a
   paragraph's line height drops to its smallest leaf's, since render-wasm
   lays out each span at the larger of the two. An unrotated text puts each
-  line on its stored baseline's pixel row; a rotated one keeps the pitch."
+  line on its stored baseline's pixel row; a rotated one keeps the pitch.
+  Returns [valign paragraphs], with the vertical align the heights assume."
   [{:keys [board-y scale] :as ctx} {:keys [selrect content] :as shape} paragraphs]
   (let [pitch   (fn [paragraph line] (apply max (map #(leaf-pitch paragraph %) line)))
         marks   (for [[paragraph lines marks] paragraphs
                       [line [y height :as mark]] (map vector lines marks)]
                   [(pitch paragraph line) y height (line-target ctx paragraph line mark)])
         pitches (line-pitches (mapv (fn [[p y height]] [p (- y (/ (+ height p) 2))]) marks))
-        heights (if (gmt/unit? (:transform shape (gmt/matrix)))
-                  (snapped-heights (map (fn [[_ _ _ target] pitch]
-                                          (assoc target :pitch pitch))
-                                        marks pitches)
-                                   (:height selrect) (:vertical-align content)
-                                   (- (:y selrect) board-y) scale)
-                  (line-heights pitches))]
-    (first
-     (reduce (fn [[out heights] [paragraph lines]]
-               (let [lines' (map (fn [line height]
-                                   (mapv #(assoc % :line-height (/ height (leaf-font-size paragraph %)))
-                                         line))
-                                 lines heights)
-                     leaves (vec (apply concat lines'))]
-                 [(conj out (assoc paragraph
-                                   :children leaves
-                                   :line-height (apply min (map :line-height leaves))))
-                  (drop (count lines) heights)]))
-             [[] heights] paragraphs))))
+        {:keys [heights valign]}
+        (if (gmt/unit? (:transform shape (gmt/matrix)))
+          (snapped-heights (map (fn [[_ _ _ target] pitch]
+                                  (assoc target :pitch pitch))
+                                marks pitches)
+                           (:height selrect) (:vertical-align content)
+                           (- (:y selrect) board-y) scale)
+          {:heights (line-heights pitches) :valign (:vertical-align content)})]
+    [valign
+     (first
+      (reduce (fn [[out heights] [paragraph lines]]
+                (let [lines' (map (fn [line height]
+                                    (mapv #(assoc % :line-height (/ height (leaf-font-size paragraph %)))
+                                          line))
+                                  lines heights)
+                      leaves (vec (apply concat lines'))]
+                  [(conj out (assoc paragraph
+                                    :children leaves
+                                    :line-height (apply min (map :line-height leaves))))
+                   (drop (count lines) heights)]))
+              [[] heights] paragraphs))]))
+
+(defn- stored-width
+  "Widens an unrotated text box to cover its stored runs, with a pixel to
+  spare on the side or sides its `aligns` grow. The editor lets a line wider
+  than the box overflow it toward the end, whatever the align, and Skia
+  breaks that line instead; Skia also measures a line a fraction wider than
+  the editor and can wrap a full one. A justified or mixed-align text keeps
+  its width."
+  [{:keys [selrect position-data] :as shape} aligns]
+  (if (and (= 1 (count aligns)) (not (contains? aligns "justify"))
+           (seq position-data) (gmt/unit? (:transform shape (gmt/matrix))))
+    (let [{:keys [x x2]} selrect
+          [pad-l pad-r] (case (first aligns) "right" [1 0] "center" [1 1] [0 1])
+          left  (min x (- (apply min (map :x position-data)) pad-l))
+          right (max x2 (+ (apply max (map #(+ (:x %) (:width %)) position-data)) pad-r))]
+      (if (or (< left x) (> right x2))
+        (let [sx (/ (- right left) (- x2 x))]
+          (gsh/apply-transform shape (gmt/matrix sx 0 0 1 (- left (* sx x)) 0)))
+        shape))
+    shape))
 
 (defn- stored-line-breaks
   "Lays a text out as its position data does. The exporter draws those runs
@@ -615,13 +653,18 @@
                     (reduced nil))))
         [paragraphs runs] (reduce step [[] (seq position-data)] paths)
         pitched? (every? (fn [[_ _ lines marks]] (= (count lines) (count marks))) paragraphs)
-        updated  (if pitched?
-                   (stored-pitch ctx shape (map rest paragraphs))
-                   (map (fn [[_ paragraph lines]] (assoc paragraph :children (vec (apply concat lines))))
-                        paragraphs))]
+        [valign updated]
+        (if pitched?
+          (stored-pitch ctx shape (map rest paragraphs))
+          [(:vertical-align content)
+           (map (fn [[_ paragraph lines]] (assoc paragraph :children (vec (apply concat lines))))
+                paragraphs)])]
     (if (and paragraphs (empty? runs))
-      (assoc shape :content (reduce (fn [content [[path] paragraph]] (assoc-in content path paragraph))
-                                    content (map vector paragraphs updated)))
+      (-> shape
+          (assoc :content (reduce (fn [content [[path] paragraph]] (assoc-in content path paragraph))
+                                  (cond-> content valign (assoc :vertical-align valign))
+                                  (map vector paragraphs updated)))
+          (stored-width (set (map (fn [[_ paragraph]] (:text-align paragraph "left")) paragraphs))))
       shape)))
 
 (defn- stored-wraps

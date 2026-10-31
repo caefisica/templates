@@ -18,10 +18,10 @@ SVG embeds its images.
 
 ## The engine files
 
-On first use the CLI downloads the engine, about 5 MB, from this repository's
-`engine-723267c-2` release into `~/.cache/templates/engine-723267c-2/`, and
-checks each file against the hash in
-[src/penpot/engine.ts](../src/penpot/engine.ts).
+On first use the CLI downloads the engine, about 5 MB, from the release of this
+repository named in [src/penpot/engine.ts](../src/penpot/engine.ts) into
+`~/.cache/templates/<release>/` (`$XDG_CACHE_HOME/templates/<release>/` when
+set), and checks each file against the hash in the same file.
 
 | File               | Holds                                                      |
 | ------------------ | ---------------------------------------------------------- |
