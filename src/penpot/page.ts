@@ -2,7 +2,7 @@
 // `ɵcontext`, the plugin API object the workspace exposes on the page. Each
 // must not reference anything outside its own body.
 
-import type { Format, Layer, PageInfo, Variant } from "../design";
+import type { Format, FrameInfo, Layer, PageInfo, Variant } from "../design";
 
 export async function penpotPages(): Promise<PageInfo[]> {
   const p = (globalThis as any)["ɵcontext"];
@@ -18,6 +18,14 @@ export async function penpotPages(): Promise<PageInfo[]> {
         h: Math.round(s.height),
       })),
   }));
+}
+
+// Any board on the open page by id, however deep, or null. Boards on other
+// pages are reachable by `penpotPages` only.
+export async function penpotFrame(args: { id: string }): Promise<FrameInfo | null> {
+  const s = (globalThis as any)["ɵcontext"].currentPage.getShapeById(args.id);
+  if (s?.type !== "board") return null;
+  return { id: s.id, name: s.name, w: Math.round(s.width), h: Math.round(s.height) };
 }
 
 // Shapes are reachable only on the open page, so this opens the page that
@@ -107,9 +115,12 @@ export async function penpotRender(args: {
   try {
     const texts: any[] = [];
     for (const [i, variant] of args.variants.entries()) {
+      // On the page itself, a copy of a nested board leaves its siblings in place.
       const copy = frame.clone();
       copies.push(copy);
+      p.root.appendChild(copy);
       copy.x = frame.x + (frame.width + 200) * (i + 1);
+      copy.y = frame.y;
       const layers = byPath(copy);
       for (const [path, value] of Object.entries(variant)) {
         const shapes = layers.get(path);

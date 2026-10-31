@@ -2,7 +2,7 @@
 // editor exposes as `figma` on files the user can edit. Each must not
 // reference anything outside its own body.
 
-import type { Format, Layer, PageInfo, Variant } from "../design";
+import type { Format, FrameInfo, Layer, PageInfo, Variant } from "../design";
 
 declare const figma: any;
 
@@ -31,6 +31,13 @@ export async function figmaPages(): Promise<PageInfo[]> {
     name: page.name,
     frames: frames(page.children),
   }));
+}
+
+// Any frame by id, however deep, or null.
+export async function figmaFrame(args: { id: string }): Promise<FrameInfo | null> {
+  const n = await figma.getNodeByIdAsync(args.id);
+  if (!n || !["FRAME", "COMPONENT", "INSTANCE"].includes(n.type)) return null;
+  return { id: n.id, name: n.name, w: Math.round(n.width), h: Math.round(n.height) };
 }
 
 export async function figmaLayers(args: { frame: string }): Promise<Layer[]> {
@@ -99,8 +106,14 @@ export async function figmaRender(args: {
 
   const out: string[] = [];
   for (const variant of args.variants) {
+    // On the page itself, a copy of a nested frame leaves its siblings in place.
     const copy = frame.clone();
-    copy.x = frame.x + frame.width + 400;
+    let page = frame.parent;
+    while (page.type !== "PAGE") page = page.parent;
+    page.appendChild(copy);
+    const box = frame.absoluteBoundingBox;
+    copy.x = box.x + box.width + 400;
+    copy.y = box.y;
     try {
       const layers = byPath(copy);
       for (const [path, value] of Object.entries(variant)) {

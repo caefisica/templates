@@ -3,15 +3,17 @@
 // reached over CDP; see src/cdp.ts.
 
 import { listTabs, openTab, Session } from "./cdp";
-import type { Format, Layer, PageInfo, Variant } from "./design";
-import { figmaLayers, figmaPages, figmaRender } from "./figma/page";
-import { penpotLayers, penpotOpen, penpotPages, penpotRender } from "./penpot/page";
+import type { Format, FrameInfo, Layer, PageInfo, Variant } from "./design";
+import { figmaFrame, figmaLayers, figmaPages, figmaRender } from "./figma/page";
+import { penpotFrame, penpotLayers, penpotOpen, penpotPages, penpotRender } from "./penpot/page";
 import { tabMatch, type Target } from "./url";
 
 export type Backend = {
   target: Target;
   session: Session;
   pages(): Promise<PageInfo[]>;
+  // A frame by id at any depth; see figmaFrame and penpotFrame for reach.
+  frame(id: string): Promise<FrameInfo | null>;
   layers(frame: string): Promise<Layer[]>;
   // Yields each variant's export in order, as its batch finishes.
   render(
@@ -51,6 +53,7 @@ export async function connect(target: Target): Promise<Backend> {
     session,
     pages: () =>
       figma ? session.call(figmaPages, undefined) : session.call(penpotPages, undefined),
+    frame: (id) => session.call(figma ? figmaFrame : penpotFrame, { id }),
     layers: async (frame) => {
       await prepare(frame);
       return session.call(figma ? figmaLayers : penpotLayers, { frame });

@@ -15,6 +15,10 @@ tab showing that file, or opens one.
 `node-id` names the frame, so `--frame` is optional there. A Penpot URL does not
 name one.
 
+An id also names a frame inside another frame, such as one card of a board that
+holds many. In Penpot the board must be on the open page. A name matches the
+frames `pages` lists only.
+
 ## Fields
 
 `templates layers` lists the frame's visible text layers and layers with an

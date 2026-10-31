@@ -161,21 +161,27 @@ async function findFrame(backend: Backend, wanted: string | undefined): Promise<
     throw new Error(
       `name a frame with --frame:\n${frames.map((f) => `  ${f.id}  ${f.name}`).join("\n")}`,
     );
-  return pickFrame(frames, key);
+  return pickFrame(frames, key, await backend.frame(key));
 }
 
 // The template's frame by id on its own design, by name on any other.
 async function templateFrame(backend: Backend, template: Template): Promise<FrameInfo> {
   const frames = (await backend.pages()).flatMap((p) => p.frames);
-  return frames.find((f) => f.id === template.frame.id) ?? pickFrame(frames, template.frame.name);
+  return (
+    frames.find((f) => f.id === template.frame.id) ??
+    (await backend.frame(template.frame.id)) ??
+    pickFrame(frames, template.frame.name)
+  );
 }
 
-function pickFrame(frames: FrameInfo[], key: string): FrameInfo {
+// A name matches top-level frames only; `byId` is the frame the id names at any depth.
+function pickFrame(frames: FrameInfo[], key: string, byId?: FrameInfo | null): FrameInfo {
+  if (byId) return byId;
   const found = frames.filter((f) => f.id === key || f.name === key);
   if (found.length === 1) return found[0]!;
   if (found.length > 1)
     throw new Error(`${found.length} frames are named "${key}"; pass an id with --frame`);
-  throw new Error(`no top-level frame "${key}"; list them with the pages command`);
+  throw new Error(`no frame "${key}"; list them with the pages command`);
 }
 
 function printLayers(list: Layer[]) {
