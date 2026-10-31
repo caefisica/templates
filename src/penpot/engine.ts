@@ -4,7 +4,7 @@
 
 import { mkdir, rename } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import type { Layer } from "../design";
 
 const release = "engine-723267c";
@@ -35,7 +35,8 @@ export type Engine = {
 };
 
 export async function loadEngine(): Promise<Engine> {
-  const dir = process.env.TEMPLATES_ENGINE ?? (await download());
+  const local = process.env.TEMPLATES_ENGINE;
+  const dir = local ? resolve(local) : await download();
   const mod = await import(join(dir, "engine.js"));
   return {
     render: (options) => mod.render({ ...options, wasmDir: dir }),
