@@ -13,12 +13,13 @@ import { tabMatch, type Target } from "./url";
 export type Backend = {
   target: Target;
   pages(): Promise<PageInfo[]>;
-  // A frame by id at any depth; see figmaFrame and penpotFrame for reach.
-  frame(id: string): Promise<FrameInfo | null>;
-  layers(frame: string): Promise<Layer[]>;
+  // A frame by id at any depth, on `page` when given; see figmaFrame and
+  // penpotFrame for reach.
+  frame(id: string, page?: string): Promise<FrameInfo | null>;
+  layers(frame: FrameInfo): Promise<Layer[]>;
   // Yields each variant's export in order.
   render(
-    frame: string,
+    frame: FrameInfo,
     variants: Variant[],
     format: Format,
     scale: number,
@@ -54,23 +55,24 @@ export async function connectTab(target: Target): Promise<TabBackend> {
     );
   }
   const figma = target.tool === "figma";
-  const prepare = (frame: string) =>
-    figma ? Promise.resolve() : session.call(penpotOpen, { frame });
+  const prepare = (frame: FrameInfo) =>
+    figma ? Promise.resolve() : session.call(penpotOpen, { frame: frame.id, page: frame.page });
   return {
     target,
     session,
     pages: () =>
       figma ? session.call(figmaPages, undefined) : session.call(penpotPages, undefined),
-    frame: (id) => session.call(figma ? figmaFrame : penpotFrame, { id }),
+    frame: (id, page) =>
+      figma ? session.call(figmaFrame, { id }) : session.call(penpotFrame, { id, page }),
     layers: async (frame) => {
       await prepare(frame);
-      return session.call(figma ? figmaLayers : penpotLayers, { frame });
+      return session.call(figma ? figmaLayers : penpotLayers, { frame: frame.id });
     },
     async *render(frame, variants, format, scale) {
       await prepare(frame);
       for (let i = 0; i < variants.length; i += batch) {
         const encoded = await session.call(figma ? figmaRender : penpotRender, {
-          frame,
+          frame: frame.id,
           variants: variants.slice(i, i + batch),
           format,
           scale,

@@ -20,6 +20,11 @@ An id also names a frame inside another frame, such as one card of a board that
 holds many. In a Penpot tab the board must be on the open page. A name matches
 the frames `pages` lists only.
 
+A Penpot id is unique within a page only, and a duplicated page keeps its
+shapes' ids. When several pages hold the id, the CLI refuses and names them;
+pass the URL of the page you want, whose `page-id` settles it. On Penpot, `init`
+records the frame's page as `frame.page` in the template.
+
 ## Fields
 
 `templates layers` lists the frame's visible text layers and layers with an

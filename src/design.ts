@@ -1,7 +1,16 @@
 // The shapes both page backends return, so the CLI treats Figma and Penpot alike.
 
 // `section` names the Figma sections that hold the frame, outermost first.
-export type FrameInfo = { id: string; name: string; w: number; h: number; section?: string };
+// `page` is the Penpot page that holds it: a Penpot id is unique within a page
+// only, and a duplicated page keeps its shapes' ids.
+export type FrameInfo = {
+  id: string;
+  name: string;
+  w: number;
+  h: number;
+  section?: string;
+  page?: string;
+};
 
 export type PageInfo = { id: string; name: string; frames: FrameInfo[] };
 

@@ -16,6 +16,7 @@ export async function penpotPages(): Promise<PageInfo[]> {
         name: s.name,
         w: Math.round(s.width),
         h: Math.round(s.height),
+        page: page.id,
       })),
   }));
 }
@@ -23,20 +24,29 @@ export async function penpotPages(): Promise<PageInfo[]> {
 // Any board on the open page by id, however deep, or null. Boards on other
 // pages are reachable by `penpotPages` only.
 // getShapeById throws on an id that is not a uuid, such as a Figma node id.
-export async function penpotFrame(args: { id: string }): Promise<FrameInfo | null> {
+export async function penpotFrame(args: { id: string; page?: string }): Promise<FrameInfo | null> {
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(args.id)) return null;
-  const s = (globalThis as any)["ɵcontext"].currentPage.getShapeById(args.id);
+  const open = (globalThis as any)["ɵcontext"].currentPage;
+  if (args.page && open.id !== args.page) return null;
+  const s = open.getShapeById(args.id);
   if (s?.type !== "board") return null;
-  return { id: s.id, name: s.name, w: Math.round(s.width), h: Math.round(s.height) };
+  return {
+    id: s.id,
+    name: s.name,
+    w: Math.round(s.width),
+    h: Math.round(s.height),
+    page: open.id,
+  };
 }
 
 // Shapes are reachable only on the open page, so this opens the page that
-// holds the frame before any other call uses it.
-export async function penpotOpen(args: { frame: string }): Promise<void> {
+// holds the frame before any other call uses it: `page`, else the open page
+// when it holds the frame, else the first page that does.
+export async function penpotOpen(args: { frame: string; page?: string }): Promise<void> {
   const p = (globalThis as any)["ɵcontext"];
-  if (p.currentPage.getShapeById(args.frame)) return;
+  if (args.page ? p.currentPage.id === args.page : p.currentPage.getShapeById(args.frame)) return;
   const page = p.currentFile.pages.find((pg: any) =>
-    pg.root?.children?.some((s: any) => s.id === args.frame),
+    args.page ? pg.id === args.page : pg.root?.children?.some((s: any) => s.id === args.frame),
   );
   if (!page) throw new Error(`no frame ${args.frame} in this file`);
   p.openPage(page);

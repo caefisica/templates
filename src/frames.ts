@@ -20,6 +20,23 @@ export function frameRuns(frames: FrameInfo[]): FrameRun[] {
   return runs;
 }
 
+// The top-level frame `key` names by id or name, or null. `page` settles a key
+// that several pages match, such as an id on a duplicated Penpot page.
+export function pickFrame(pages: PageInfo[], key: string, page?: string): FrameInfo | null {
+  const all = pages.flatMap((p) => p.frames.filter((f) => f.id === key || f.name === key));
+  const onPage = all.filter((f) => f.page === page);
+  const found = page && onPage.length > 0 ? onPage : all;
+  if (found.length === 1) return found[0]!;
+  if (found.length === 0) return null;
+  if (found.every((f) => f.id === found[0]!.id)) {
+    const names = pages.filter((p) => found.some((f) => f.page === p.id)).map((p) => p.name);
+    throw new Error(
+      `frame ${key} is on pages ${names.join(", ")}; open the one you want and pass its URL, which names its page`,
+    );
+  }
+  throw new Error(`${found.length} frames are named "${key}"; pass an id with --frame`);
+}
+
 export function pickPage(pages: PageInfo[], key: string): PageInfo {
   const found = pages.filter((p) => p.id === key || p.name === key);
   if (found.length === 1) return found[0]!;

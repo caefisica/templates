@@ -64,34 +64,37 @@ export function headless(target: PenpotTarget, token: string): Backend {
   const getFonts = () =>
     (fonts ??= transit("get-font-variants", ["^ ", "~:team-id", `~u${target.team}`]));
 
-  const info = (s: Shape): FrameInfo => ({
+  const info = (s: Shape, page: string): FrameInfo => ({
     id: s.id,
     name: s.name,
     w: Math.round(s.width),
     h: Math.round(s.height),
+    page,
   });
 
-  // The page that holds the board, and the top-level board above it.
-  const locate = async (id: string) => {
+  // The page that holds the board, `page` or else the first that does, and
+  // the top-level board above it.
+  const locate = async (id: string, page?: string) => {
     const { data } = await getFile();
-    for (const page of data.pages) {
-      const objects = data.pagesIndex[page]!.objects;
+    for (const at of page ? [page] : data.pages) {
+      const objects = data.pagesIndex[at]?.objects ?? {};
       let shape = objects[id];
       if (shape?.type !== "frame") continue;
       while (shape.parentId !== root) shape = objects[shape.parentId]!;
-      return { page, board: shape.id };
+      return { page: at, shape: objects[id]!, board: shape.id };
     }
     return null;
   };
 
   // The transit page holding the frame's top-level board and its subtree.
   const boards = new Map<string, Promise<string>>();
-  const pageOf = async (frame: string) => {
-    const at = await locate(frame);
-    if (!at) throw new Error(`no frame ${frame} in this file`);
-    if (!boards.has(at.board))
+  const pageOf = async (frame: FrameInfo) => {
+    const at = await locate(frame.id, frame.page);
+    if (!at) throw new Error(`no frame ${frame.id} in this file`);
+    const key = `${at.page} ${at.board}`;
+    if (!boards.has(key))
       boards.set(
-        at.board,
+        key,
         transit("get-page", [
           "^ ",
           "~:file-id",
@@ -102,7 +105,7 @@ export function headless(target: PenpotTarget, token: string): Backend {
           ["~#set", [`~u${at.board}`]],
         ]),
       );
-    return boards.get(at.board)!;
+    return boards.get(key)!;
   };
 
   const origin = `${target.origin}/`;
@@ -120,20 +123,16 @@ export function headless(target: PenpotTarget, token: string): Backend {
         const frames = (objects[root]!.shapes ?? [])
           .map((child) => objects[child]!)
           .filter((s) => s.type === "frame")
-          .map(info);
+          .map((s) => info(s, id));
         return { id, name, frames };
       });
     },
-    async frame(id) {
-      const { data } = await getFile();
-      for (const page of data.pages) {
-        const shape = data.pagesIndex[page]!.objects[id];
-        if (shape?.type === "frame") return info(shape);
-      }
-      return null;
+    async frame(id, page) {
+      const at = await locate(id, page);
+      return at && info(at.shape, at.page);
     },
     async layers(frame) {
-      return (await getEngine()).layers(await pageOf(frame), frame);
+      return (await getEngine()).layers(await pageOf(frame), frame.id);
     },
     async *render(frame, variants, format, scale) {
       const [engine, page, fontVariants] = await Promise.all([
@@ -144,7 +143,7 @@ export function headless(target: PenpotTarget, token: string): Backend {
       for (const v of variants) {
         const [bytes] = await engine.render({
           page,
-          frame,
+          frame: frame.id,
           variants: [v],
           format,
           scale,
