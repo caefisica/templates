@@ -22,8 +22,8 @@ the frames `pages` lists only.
 
 A Penpot id is unique within a page only, and a duplicated page keeps its
 shapes' ids. When several pages hold the id, the CLI refuses and names them;
-pass the URL of the page you want, whose `page-id` settles it. On Penpot,
-`init` records the frame's page as `frame.page` in the template.
+pass the URL of the page you want, whose `page-id` settles it. On Penpot, `init`
+records the frame's page as `frame.page` in the template.
 
 ## Fields
 
