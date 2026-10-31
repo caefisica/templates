@@ -139,6 +139,22 @@ export async function penpotRender(args: {
   }
 }
 
+// The board on the open page that an earlier `copy` made from `source`.
+export async function penpotCopyOf(args: {
+  source: string;
+}): Promise<{ id: string; x: number; y: number } | null> {
+  const p = (globalThis as any)["ɵcontext"];
+  const board = p.currentPage.root.children.find(
+    (s: any) => s.type === "board" && s.getSharedPluginData("templates", "source") === args.source,
+  );
+  return board ? { id: board.id, x: board.x, y: board.y } : null;
+}
+
+export async function penpotRemove(args: { id: string }): Promise<void> {
+  const p = (globalThis as any)["ɵcontext"];
+  p.currentPage.getShapeById(args.id)?.remove();
+}
+
 // The x just right of everything on the open page, where a new frame lands
 // clear of the rest.
 export async function penpotFreeX(): Promise<number> {

@@ -214,5 +214,6 @@ export async function writePenpot(args: {
   };
 
   const root = await create(design.root, { cx: 0, cy: 0, bx: args.x, by: args.y, rotation: 0 });
+  root.setSharedPluginData("templates", "source", design.source);
   return { id: root.id, warnings };
 }

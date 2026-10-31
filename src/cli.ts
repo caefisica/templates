@@ -8,7 +8,7 @@ import { type Backend, connect } from "./backend";
 import { formats, type Format, type FrameInfo, type Layer } from "./design";
 import { readFigma } from "./figma/read";
 import { plan, readRows, variant } from "./data";
-import { penpotFreeX } from "./penpot/page";
+import { penpotCopyOf, penpotFreeX, penpotRemove } from "./penpot/page";
 import { writePenpot } from "./penpot/write";
 import { chooseFields, drift, type Template } from "./template";
 import { parseUrl } from "./url";
@@ -125,9 +125,13 @@ async function copy(url: string) {
 
   await using dest = await open(values.to);
   if (dest.target.tool !== "penpot") throw new Error("copy writes to Penpot");
-  const x = await dest.session.call(penpotFreeX, undefined);
-  const made = await dest.session.call(writePenpot, { design, x, y: 0 });
-  console.log(`${frame.name} → Penpot board ${made.id}`);
+  const earlier = await dest.session.call(penpotCopyOf, { source: design.source });
+  const at = earlier ?? { x: await dest.session.call(penpotFreeX, undefined), y: 0 };
+  const made = await dest.session.call(writePenpot, { design, x: at.x, y: at.y });
+  if (earlier) await dest.session.call(penpotRemove, { id: earlier.id });
+  console.log(
+    `${frame.name} → Penpot board ${made.id}` + (earlier ? `, replacing ${earlier.id}` : ""),
+  );
   for (const warning of [...design.warnings, ...made.warnings])
     console.log(`  warning: ${warning}`);
 }

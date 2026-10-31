@@ -5,14 +5,16 @@ templates copy 'https://www.figma.com/design/<file>/x?node-id=52-2' --to 'https:
 ```
 
 ```
-Blue - Ciencias Básicas → Penpot board c35bd1e2-8b4f-8033-8008-defe01a2535c
+Blue - Ciencias Básicas → Penpot board 9151ea3d-37d3-8010-8008-df1598554186
   warning: ogbu logo: crop image baked to a picture
 ```
 
-`copy` reads one Figma frame and builds it again as a Penpot board. The board
-goes right of everything on the page the Penpot tab shows. Each run makes a new
-board and leaves earlier copies alone, so delete the old board before you copy
-again.
+`copy` reads one Figma frame and builds it again as a Penpot board on the page
+the Penpot tab shows. The board records its Figma file and frame in Penpot
+shared plugin data. Copy the same frame again and the new board takes the old
+board's place, and the old board is deleted; the output ends with
+`, replacing <id>`. A first copy goes right of everything on the page. Edits
+made in Penpot to a copied board are lost on the next copy.
 
 A template made on the Figma frame renders the copy with `--on`, because fields
 address layers by name path. Confirm it first:
