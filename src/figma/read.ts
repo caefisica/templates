@@ -375,6 +375,11 @@ export async function readFigma(args: { id: string }): Promise<Design> {
     if (!same("lineHeight") || !same("letterSpacing"))
       warnings.add(`${n.name}: mixed line height or letter spacing flattened to the first`);
     if (n.paragraphIndent) warnings.add(`${n.name}: paragraph indent dropped`);
+    if (
+      n.characters.length &&
+      n.getStyledTextSegments(["listOptions"]).some((s: any) => s.listOptions.type !== "NONE")
+    )
+      warnings.add(`${n.name}: list numbers and bullets dropped`);
     return {
       chars: n.characters,
       runs: runs.length > 1 ? runs : [],

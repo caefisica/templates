@@ -55,6 +55,7 @@ templates check template.json --on '<penpot url>'
 | `vector draws nothing, copied as an empty...`  | The vector has no visible paint, so it became an empty rectangle.                        |
 | `mixed line height or letter spacing flatt...` | A text whose runs differ in line height or letter spacing takes the first run's.         |
 | `paragraph indent dropped`                     | Penpot has no first-line indent; the first line starts at the margin.                    |
+| `list numbers and bullets dropped`             | Penpot texts have no list style; the paragraphs lose their numbers and bullets.          |
 | `font ... not loadable, cap-height trim ...`   | Figma on this machine lacks the font, so a trimmed text keeps its box.                   |
 | `font ... not loadable, auto line height ...`  | Figma on this machine lacks the font, so an auto line height becomes 1.2.                |
 | `font missing in Penpot`                       | Add the font to the Penpot team, then copy again.                                        |
