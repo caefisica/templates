@@ -1,0 +1,96 @@
+diff --git a/render-wasm/src/render/fonts.rs b/render-wasm/src/render/fonts.rs
+index b1a0953..373b275 100644
+--- a/render-wasm/src/render/fonts.rs
++++ b/render-wasm/src/render/fonts.rs
+@@ -25,7 +25,9 @@ pub struct FontStore {
+     font_collection: textlayout::FontCollection,
+     debug_font: Font,
+     ui_font: Font,
+-    fallback_fonts: HashSet<String>,
++    /// In the order they were stored: Skia tries a text's fallbacks in turn,
++    /// so the first one with a glyph draws it and sets its line's height.
++    fallback_fonts: Vec<String>,
+     /// Source URL registered when the font was fetched (SVG export references
+     /// this in `@font-face` rules).
+     source_urls: HashMap<String, String>,
+@@ -62,7 +64,7 @@ impl FontStore {
+             font_collection,
+             debug_font,
+             ui_font,
+-            fallback_fonts: HashSet::new(),
++            fallback_fonts: Vec::new(),
+             source_urls: HashMap::new(),
+         })
+     }
+@@ -116,8 +118,8 @@ impl FontStore {
+         self.font_provider.register_typeface(typeface, font_name);
+         self.font_collection.clear_caches();
+ 
+-        if is_fallback {
+-            self.fallback_fonts.insert(alias);
++        if is_fallback && !self.fallback_fonts.contains(&alias) {
++            self.fallback_fonts.push(alias);
+         }
+ 
+         Ok(())
+@@ -133,7 +135,7 @@ impl FontStore {
+         self.font_provider.family_names().any(|x| x == font_name)
+     }
+ 
+-    pub fn get_fallback(&self) -> &HashSet<String> {
++    pub fn get_fallback(&self) -> &[String] {
+         &self.fallback_fonts
+     }
+ 
+diff --git a/render-wasm/src/shapes/text.rs b/render-wasm/src/shapes/text.rs
+index a8328be..af661cc 100644
+--- a/render-wasm/src/shapes/text.rs
++++ b/render-wasm/src/shapes/text.rs
+@@ -1708,7 +1708,7 @@ impl TextSpan {
+     pub fn to_style(
+         &self,
+         content_bounds: &Rect,
+-        fallback_fonts: &HashSet<String>,
++        fallback_fonts: &[String],
+         remove_alpha: bool,
+         paragraph_line_height: f32,
+     ) -> skia::textlayout::TextStyle {
+@@ -1724,7 +1724,7 @@ impl TextSpan {
+     fn to_style_with_paint(
+         &self,
+         content_bounds: &Rect,
+-        fallback_fonts: &HashSet<String>,
++        fallback_fonts: &[String],
+         remove_alpha: bool,
+         paragraph_line_height: f32,
+         fill_layer_from_bottom: Option<usize>,
+@@ -1778,7 +1778,7 @@ impl TextSpan {
+     pub fn to_stroke_style(
+         &self,
+         stroke_paint: &Paint,
+-        fallback_fonts: &HashSet<String>,
++        fallback_fonts: &[String],
+         remove_alpha: bool,
+         paragraph_line_height: f32,
+     ) -> skia::textlayout::TextStyle {
+diff --git a/render-wasm/src/utils.rs b/render-wasm/src/utils.rs
+index 12c9c51..de67cd4 100644
+--- a/render-wasm/src/utils.rs
++++ b/render-wasm/src/utils.rs
+@@ -3,7 +3,6 @@ use crate::skia::textlayout::FontCollection;
+ use crate::skia::Image;
+ use crate::uuid::Uuid;
+ use crate::with_state;
+-use std::collections::HashSet;
+ 
+ pub fn uuid_from_u32_quartet(a: u32, b: u32, c: u32, d: u32) -> Uuid {
+     let hi: u64 = ((a as u64) << 32) | b as u64;
+@@ -29,7 +28,7 @@ pub fn get_image(image_id: &Uuid) -> Option<&Image> {
+ }
+ 
+ // FIXME: move to a different place ?
+-pub fn get_fallback_fonts() -> &'static HashSet<String> {
++pub fn get_fallback_fonts() -> &'static [String] {
+     get_resources().fonts.get_fallback()
+ }
+ 

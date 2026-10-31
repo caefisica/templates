@@ -119,18 +119,24 @@
      (cond-> (cfnt/add-noto-fonts [] (reduce cfnt/collect-used-languages #{} texts))
        (some cfnt/contains-emoji? texts) (cfnt/add-emoji-font)))))
 
-(defn- provision-fallback-fonts! [{:keys [fetch]} objects]
-  (p/all
-   (for [{:keys [font-id weight style is-emoji is-fallback]} (fallback-fonts objects)
-         :let [font-uuid (cfnt/gfont-id->uuid font-id)
-               url       (some-> font-uuid (cfnt/resolve-ttf-url weight style))]
-         :when url]
-     (p/fmap (fn [buf]
-               (when buf
-                 (wasm/store-font! {:id (uuid/get-u32 font-uuid) :weight weight :style style
-                                    :emoji? (boolean is-emoji) :fallback? (boolean is-fallback)}
-                                   buf)))
-             (fetch-cached fetch url)))))
+(defn- provision-fallback-fonts!
+  "Stores the fallback fonts once all have arrived, in font id order.
+  render-wasm tries them in the order they were stored, and a glyph two of
+  them have (⇧ is in both Noto Sans Symbols fonts) takes its line height from
+  the first."
+  [{:keys [fetch]} objects]
+  (let [fonts (for [{:keys [font-id weight style] :as font} (sort-by :font-id (fallback-fonts objects))
+                    :let [font-uuid (cfnt/gfont-id->uuid font-id)
+                          url       (some-> font-uuid (cfnt/resolve-ttf-url weight style))]
+                    :when url]
+                [(assoc font :uuid font-uuid) url])]
+    (p/fmap (fn [bufs]
+              (doseq [[[{:keys [uuid weight style is-emoji is-fallback]}] buf] (map vector fonts bufs)
+                      :when buf]
+                (wasm/store-font! {:id (uuid/get-u32 uuid) :weight weight :style style
+                                   :emoji? (boolean is-emoji) :fallback? (boolean is-fallback)}
+                                  buf)))
+            (p/all (map #(fetch-cached fetch (second %)) fonts)))))
 
 (defn- ttf-metrics
   "The ascent and descent of a TTF or OTF in `buf` per unit of font size, as
