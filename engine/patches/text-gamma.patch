@@ -1,0 +1,20 @@
+--- a/render-wasm/src/render/raster.rs
++++ b/render-wasm/src/render/raster.rs
+@@ -113,7 +113,16 @@
+         return Ok((Vec::new(), 0, 0));
+     }
+ 
+-    let mut surface = skia::surfaces::raster_n32_premul((width, height)).ok_or_else(|| {
++    // Chromium's Linux text contrast and gamma, so glyph edges carry the ink
++    // they have in the server's export, which Chromium draws.
++    let props = skia::SurfaceProps::new_with_text_properties(
++        skia::SurfacePropsFlags::default(),
++        skia::PixelGeometry::Unknown,
++        0.2,
++        1.2,
++    );
++    let info = skia::ImageInfo::new_n32_premul((width, height), None);
++    let mut surface = skia::surfaces::raster(&info, None, Some(&props)).ok_or_else(|| {
+         Error::CriticalError("Failed to create raster export surface".to_string())
+     })?;
+ 

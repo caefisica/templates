@@ -1,0 +1,12 @@
+--- a/render-wasm/src/shapes/text.rs
++++ b/render-wasm/src/shapes/text.rs
+@@ -1771,6 +1771,9 @@
+         style.set_font_size(self.font_size);
+         style.set_letter_spacing(self.letter_spacing);
+         style.set_half_leading(true);
++        // The server's export draws unhinted outlines; slight hinting snaps
++        // horizontal edges and stems that Chromium leaves fractional.
++        style.set_font_hinting(skia::FontHinting::None);
+ 
+         style
+     }
