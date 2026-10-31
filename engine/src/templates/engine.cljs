@@ -916,6 +916,51 @@
         moved   (if (seq entries) (propagate! (vec entries)) [])]
     (reduce (fn [objects [id m]] (update objects id gsh/apply-transform m)) objects moved)))
 
+;; --- overflow
+
+(defn- visible-texts [objects root-id]
+  (letfn [(visit [id]
+            (let [shape (get objects id)]
+              (when-not (:hidden shape)
+                (cons id (mapcat visit (:shapes shape))))))]
+    (filter #(= :text (:type (get objects %)))
+            (mapcat visit (:shapes (get objects root-id))))))
+
+(defn- layer-path [objects root-id id]
+  (->> (iterate #(:parent-id (get objects %)) id)
+       (take-while #(and (some? %) (not= root-id %)))
+       (map #(:name (get objects %)))
+       reverse
+       (interpose "/")
+       (apply str)))
+
+(defn- past-edges
+  "How far the shape `id` reaches past each edge of the board `root-id`."
+  [objects root-id id]
+  (let [board (get-in objects [root-id :selrect])
+        box   (get-in objects [id :selrect])]
+    {:left   (- (:x1 board) (:x1 box))
+     :right  (- (:x2 box) (:x2 board))
+     :top    (- (:y1 board) (:y1 box))
+     :bottom (- (:y2 box) (:y2 board))}))
+
+(defn- overflow
+  "The texts the variant pushed past an edge of the clipping board `root-id`,
+  as [{:path :edge :px}], one per path at its furthest edge. A text that
+  already crossed an edge in the design warns only when it reaches further. A
+  board that shows its content grows the export instead of clipping it."
+  [before after root-id]
+  (if (get-in after [root-id :show-content])
+    []
+    (->> (for [id    (visible-texts after root-id)
+               :let  [was (when (contains? before id) (past-edges before root-id id))]
+               [edge px] (past-edges after root-id id)
+               :when (and (> px 0.5) (> (- px (max 0 (get was edge 0))) 0.5))]
+           {:path (layer-path after root-id id) :edge (name edge) :px (js/Math.round px)})
+         (group-by :path)
+         vals
+         (mapv #(apply max-key :px %)))))
+
 ;; --- render
 
 (defn- render-bytes [frame-id format scale]
@@ -943,13 +988,14 @@
                      (->> (p/all [(provision-fonts! opts frame-id)
                                   (provision-fallback-fonts! opts (:objects state))
                                   (provision-images! opts (:objects state) (:images state))])
-                          (p/fmap (fn [_]
+                          (p/mcat (fn [_]
                                     (layout-texts! (:objects state))
                                     (let [moved (letter-spacing-shift (lay-out state) frame-id)]
                                       (when-not (identical? moved (:objects state))
                                         (serialize! moved)
                                         (layout-texts! moved))
-                                      (render-bytes frame-id (:format opts) (:scale opts))))))))))))
+                                      (p/fmap (fn [bytes] {:bytes bytes :overflow (overflow objects moved frame-id)})
+                                              (p/resolved (render-bytes frame-id (:format opts) (:scale opts))))))))))))))
 
 (defonce ^:private module* (atom nil))
 
@@ -959,7 +1005,9 @@
   {path: value}), format (png, jpg, pdf, svg), scale, origin (the Penpot URL
   with a trailing slash), wasmDir, fetch (url -> Promise of an ArrayBuffer or
   null) and fontVariants (the transit text of `get-font-variants`, optional).
-  Returns a Promise of an array of Uint8Array, in variant order."
+  Returns a Promise of an array of {bytes, overflow}, in variant order:
+  bytes is a Uint8Array and overflow lists {path, edge, px} as `overflow`
+  does."
   [^js opts]
   (let [objects  (:objects (t/decode-str (.-page opts)))
         frame-id (uuid/uuid (.-frame opts))

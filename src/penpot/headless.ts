@@ -118,7 +118,7 @@ export function headless(target: PenpotTarget, token: string): Backend {
         getFonts(),
       ]);
       for (const v of variants) {
-        const [bytes] = await engine.render({
+        const [rendered] = await engine.render({
           page,
           frame: frame.id,
           variants: [v],
@@ -128,7 +128,7 @@ export function headless(target: PenpotTarget, token: string): Backend {
           fetch: fetchAsset,
           fontVariants,
         });
-        yield bytes!;
+        yield rendered!;
       }
     },
     close() {},

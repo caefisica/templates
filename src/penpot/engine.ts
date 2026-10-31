@@ -5,14 +5,14 @@
 import { mkdir, rename } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import type { Layer } from "../design";
+import type { Layer, Rendered } from "../design";
 
-const release = "engine-723267c-14";
+const release = "engine-723267c-15";
 
 const sha256: Record<string, string> = {
-  "engine.js": "e68232b3c95cd97b6b2c35e35dd4e872ca08aeb46dee416f430199bfe4489744",
+  "engine.js": "c15b65e6cb9510a1c0a7824723249ecc8f459c704108e0e57aa95c4710f3e0f6",
   "render-wasm.js": "d36f8fb63eee2799e2e95e813c925c5b823db16071ba5c02240ec85a54fd46eb",
-  "render-wasm.wasm": "adfe57803b9a77bccdeeadddd37746050cc6ef9c3345ce836c040b8a80477b36",
+  "render-wasm.wasm": "561094393cd6c3434be11a149cab425be7865200767853813a8ce354637042d6",
 };
 
 export type RenderOptions = {
@@ -30,7 +30,7 @@ export type RenderOptions = {
 };
 
 export type Engine = {
-  render(options: RenderOptions): Promise<Uint8Array[]>;
+  render(options: RenderOptions): Promise<Rendered[]>;
   layers(page: string, frame: string): Layer[];
 };
 

@@ -65,7 +65,7 @@ beforeAll(async () => {
        const own = await o.fetch(o.origin + "assets/x");
        const other = await o.fetch("https://fonts.test/a");
        const text = JSON.stringify([o.frame, o.variants, o.format, o.scale, o.wasmDir, o.fontVariants, own !== null, other !== null]);
-       return [new TextEncoder().encode(text)];
+       return [{ bytes: new TextEncoder().encode(text), overflow: [] }];
      };`,
   );
   process.env.TEMPLATES_ENGINE = dir;
@@ -152,7 +152,7 @@ test("a frame id that two pages hold reads the frame's own page", async () => {
 test("render yields one export per variant and signs only its own asset requests", async () => {
   const out: string[] = [];
   const variants: Variant[] = [{ a: { kind: "hidden" } }, {}];
-  for await (const bytes of headless(target, "k").render(at("b3", "p2"), variants, "png", 2))
+  for await (const { bytes } of headless(target, "k").render(at("b3", "p2"), variants, "png", 2))
     out.push(new TextDecoder().decode(bytes));
   expect(out.map((o) => JSON.parse(o))).toEqual([
     ["b3", [variants[0]], "png", 2, process.env.TEMPLATES_ENGINE, "fonts", true, false],

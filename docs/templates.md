@@ -154,6 +154,24 @@ an SVG links its images from the server instead of embedding them.
 Over the API, Penpot renders on your machine and never edits the design. Two
 variants of a 1080×770 card take under two seconds.
 
+## Overflow
+
+A value longer than its layer can push text past the frame's edge, where the
+frame cuts it off. `render` warns under the file it wrote:
+
+```
+out/long.png  22 KB
+  warning: row/more runs 52 px past the right edge
+  warning: title runs 46 px past the bottom edge
+  warning: date runs 203 px past the right edge
+```
+
+Each visible text warns at its furthest edge, measured by its text box. A text
+that a grown neighbour pushed out warns too, such as `row/more` beside a long
+tag. A text the design already runs past an edge warns only when the value takes
+it further. A frame that does not clip its content grows the export instead, so
+it never warns. The file is written either way.
+
 ## Check
 
 `check` compares the template with the design's layers. It prints one line per

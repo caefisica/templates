@@ -29,6 +29,14 @@ export type Value =
 // Values keyed by layer path.
 export type Variant = Record<string, Value>;
 
+// A text a variant pushed past an edge of a frame that clips its content,
+// by `px` at its furthest edge. A text the design already ran past an edge
+// counts only when it reaches further.
+export type Overflow = { path: string; edge: "left" | "right" | "top" | "bottom"; px: number };
+
+// One variant's export.
+export type Rendered = { bytes: Uint8Array; overflow: Overflow[] };
+
 export type Format = "png" | "jpg" | "pdf" | "svg";
 
 export const formats: Format[] = ["png", "jpg", "pdf", "svg"];

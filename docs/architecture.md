@@ -27,8 +27,10 @@ over Penpot's RPC API and renders it in-process with the engine built from
    [src/penpot/page.ts](../src/penpot/page.ts), or `figmaRender` in
    [src/figma/page.ts](../src/figma/page.ts). The page function copies the
    frame, sets each field's layers, exports the copy and deletes it. It returns
-   the exports as base64.
-7. The CLI writes each export to `--out` as its batch arrives.
+   the exports as base64, each with the texts the variant pushed past the
+   frame's edges.
+7. The CLI writes each export to `--out` as its batch arrives, and prints a
+   warning per overflowing text.
 
 `pages`, `layers` and `check` take steps 3 to 5 and call `pages` or `layers` on
 the backend.
@@ -47,7 +49,7 @@ When `penpotToken` finds a token, `connect` in step 4 returns the backend in
    [engine/src/templates/engine.cljs](../engine/src/templates/engine.cljs)
    applies each variant to the shapes in memory, loads their fonts and images
    through the backend's `fetch`, lays out the text and flex layouts in the
-   renderer, and returns the export's bytes.
+   renderer, and returns the export's bytes and its overflowing texts.
 
 `layers` takes steps 1 to 3 and calls the engine's `layers`.
 [src/template.ts](../src/template.ts) turns layers into fields for `init` and

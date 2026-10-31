@@ -2,7 +2,7 @@
 // editor exposes as `figma` on files the user can edit. Each must not
 // reference anything outside its own body.
 
-import type { Format, FrameInfo, Layer, PageInfo, Variant } from "../design";
+import type { Format, FrameInfo, Layer, Overflow, PageInfo, Variant } from "../design";
 
 declare const figma: any;
 
@@ -75,9 +75,51 @@ export async function figmaRender(args: {
   variants: Variant[];
   format: Format;
   scale: number;
-}): Promise<string[]> {
+}): Promise<{ base64: string; overflow: Overflow[] }[]> {
   const frame = await figma.getNodeByIdAsync(args.frame);
   if (!frame) throw new Error(`no frame ${args.frame} in this file`);
+  // How far each visible text's box runs past each edge of `root`, the
+  // furthest of the texts at one path. A copy of a list row shares its row's
+  // path.
+  const sides = ["left", "right", "top", "bottom"] as const;
+  const past = (root: any) => {
+    const r = root.absoluteBoundingBox;
+    const found = new Map<string, Record<string, number>>();
+    const visit = (n: any, path: string) => {
+      if (!n.visible) return;
+      if (n.type === "TEXT") {
+        const b = n.absoluteBoundingBox;
+        const now = {
+          left: r.x - b.x,
+          right: b.x + b.width - r.x - r.width,
+          top: r.y - b.y,
+          bottom: b.y + b.height - r.y - r.height,
+        };
+        const was = found.get(path);
+        for (const side of sides) now[side] = Math.max(now[side], was?.[side] ?? -Infinity);
+        found.set(path, now);
+      }
+      for (const child of n.children ?? []) visit(child, `${path}/${child.name}`);
+    };
+    for (const child of root.children) visit(child, child.name);
+    return found;
+  };
+  const design = past(frame);
+  const overflow = (copy: any): Overflow[] => {
+    if (!frame.clipsContent) return [];
+    const found: Overflow[] = [];
+    for (const [path, now] of past(copy)) {
+      let worst: Overflow | undefined;
+      for (const edge of sides) {
+        const px = now[edge]!;
+        const was = Math.max(0, design.get(path)?.[edge] ?? 0);
+        if (px > 0.5 && px - was > 0.5 && px > (worst?.px ?? 0))
+          worst = { path, edge, px: Math.round(px) };
+      }
+      if (worst) found.push(worst);
+    }
+    return found;
+  };
   const bytes = (base64: string) => Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
   const base64 = (data: Uint8Array) => {
     let binary = "";
@@ -104,6 +146,9 @@ export async function figmaRender(args: {
           `${path}: font "${font.family} ${font.style}" is not installed where Figma runs, and Figma edits a text only in a font it can load`,
         );
       });
+    // A text Figma names after its characters would otherwise take the new
+    // text as its name, and its overflow would report under that name.
+    n.autoRename = false;
     n.characters = text;
   };
   const apply = async (root: any, variant: Variant) => {
@@ -154,7 +199,7 @@ export async function figmaRender(args: {
             constraint: { type: "SCALE", value: args.scale },
           };
 
-  const out: string[] = [];
+  const out: { base64: string; overflow: Overflow[] }[] = [];
   for (const variant of args.variants) {
     // On the page itself, a copy of a nested frame leaves its siblings in place.
     const copy = frame.clone();
@@ -166,7 +211,7 @@ export async function figmaRender(args: {
     copy.y = box.y;
     try {
       await apply(copy, variant);
-      out.push(base64(await copy.exportAsync(settings)));
+      out.push({ base64: base64(await copy.exportAsync(settings)), overflow: overflow(copy) });
     } finally {
       copy.remove();
     }
