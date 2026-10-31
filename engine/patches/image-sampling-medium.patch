@@ -1,0 +1,17 @@
+diff --git a/render-wasm/src/render/resources.rs b/render-wasm/src/render/resources.rs
+index 4ca9761..f6873d5 100644
+--- a/render-wasm/src/render/resources.rs
++++ b/render-wasm/src/render/resources.rs
+@@ -34,9 +34,11 @@ impl RenderResources {
+         Ok(Self {
+             fonts: FontStore::try_new()?,
+             images: ImageStore::new_without_gpu(),
++            // Chromium draws images at its default "medium" quality, linear
++            // within and between mip levels; the server export renders there.
+             sampling_options: skia::SamplingOptions::new(
+                 skia::FilterMode::Linear,
+-                skia::MipmapMode::Nearest,
++                skia::MipmapMode::Linear,
+             ),
+         })
+     }
