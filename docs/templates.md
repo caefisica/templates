@@ -98,11 +98,18 @@ field names, so the data file is JSON:
 
 The render removes the row's siblings of the same layer type, which are the
 design's other example rows, and puts one copy of the row per item in their
-place. An item that leaves a field out or empty hides that layer.
+place. An item that leaves a field out or empty hides that layer. In Figma, a
+text whose auto layout spaces its children between them is emptied instead, so
+the other children keep their places.
 
 The rows stack only inside an auto layout (Figma) or flex layout (Penpot). The
 frame keeps its height unless it hugs its contents, so a longer list on a
 fixed-height frame is cut off at the bottom.
+
+Figma keeps the count of a numbered-list text inside the text, where a plugin
+cannot set it, so every copy of a numbered row shows the row's own number.
+Penpot has no numbered lists. Turn the list style off and put the numbers in the
+data.
 
 ## Data
 
