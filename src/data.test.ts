@@ -39,13 +39,14 @@ test("two rows writing one file are refused", () => {
 
 test("cells become layer values and image paths load relative to the data", async () => {
   const dir = await mkdtemp(join(tmpdir(), "templates-"));
-  await writeFile(join(dir, "p.png"), new Uint8Array([0x89, 0x50, 0x4e, 0x47]));
+  const png = await Bun.file(join(import.meta.dir, "testdata", "3x2.png")).bytes();
+  await writeFile(join(dir, "p.png"), png);
   await writeFile(join(dir, "rows.csv"), "date,photo\n31 de Octubre,p.png\n");
   const rows = await readRows(join(dir, "rows.csv"));
   const values = await variant(template, plan(template, rows)[0]!.cells, join(dir, "rows.csv"));
   expect(values).toEqual({
     "Header/23 dE MAYO": { kind: "text", text: "31 de Octubre" },
-    "Body/Image": { kind: "image", mime: "image/png", base64: "iVBORw==" },
+    "Body/Image": { kind: "image", mime: "image/png", width: 3, height: 2, base64: png.toBase64() },
   });
 });
 

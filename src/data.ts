@@ -8,6 +8,7 @@
 import { dirname, extname, resolve } from "node:path";
 import { parse } from "csv-parse/sync";
 import type { Value, Variant } from "./design";
+import { imageInfo } from "./image";
 import { slug, type Leaf, type Template } from "./template";
 
 export type Cell = string | Record<string, string>[];
@@ -97,15 +98,8 @@ async function image(cell: string, base: string): Promise<Value> {
   const data = remote
     ? new Uint8Array(await (await fetch(cell)).arrayBuffer())
     : await Bun.file(resolve(base, cell)).bytes();
-  const mime = sniff(data);
+  const info = imageInfo(data);
   // Figma and Penpot both take these three; anything else is converted first.
-  if (!mime) throw new Error(`${cell}: images must be PNG, JPEG or GIF`);
-  return { kind: "image", mime, base64: data.toBase64() };
-}
-
-function sniff(data: Uint8Array): string | null {
-  if (data[0] === 0x89 && data[1] === 0x50) return "image/png";
-  if (data[0] === 0xff && data[1] === 0xd8) return "image/jpeg";
-  if (data[0] === 0x47 && data[1] === 0x49) return "image/gif";
-  return null;
+  if (!info) throw new Error(`${cell}: images must be PNG, JPEG or GIF`);
+  return { kind: "image", ...info, base64: data.toBase64() };
 }

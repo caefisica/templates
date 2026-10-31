@@ -4,7 +4,7 @@
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
-import { type Backend, connect } from "./backend";
+import { type Backend, connect, connectTab, type TabBackend } from "./backend";
 import { formats, type Format, type FrameInfo, type Layer } from "./design";
 import { readFigma } from "./figma/read";
 import { frameRuns, pickPage } from "./frames";
@@ -22,8 +22,10 @@ const usage = `usage:
   templates check <template.json> [--on url]    report fields whose layer is gone or changed
   templates copy <figma-url> --to <penpot-url> [--frame F]
 
-<url> is a Figma design URL or a Penpot workspace URL, open in the browser on
-CDP_URL (default http://127.0.0.1:9222). F is a frame id or name; a Figma URL
+<url> is a Figma design URL or a Penpot workspace URL. A Penpot file is read
+over its API when PENPOT_TOKEN or ~/.config/templates/penpot-token holds an
+access token; anything else runs in the browser on CDP_URL (default
+http://127.0.0.1:9222), as copy always does. F is a frame id or name; a Figma URL
 with node-id names one. --on renders or checks another design, such as the
 Penpot copy, and finds the frame there by name. --list names a repeating row;
 --field list.name=layer picks a layer inside it, and a JSON data cell holds
@@ -133,12 +135,12 @@ async function check(templatePath: string) {
 
 async function copy(url: string) {
   if (!values.to) throw new Error("copy needs --to <penpot-url>");
-  await using source = await open(url);
+  await using source = await openTab(url);
   if (source.target.tool !== "figma") throw new Error("copy reads from Figma");
   const frame = await findFrame(source, values.frame);
   const design = await source.session.call(readFigma, { id: frame.id });
 
-  await using dest = await open(values.to);
+  await using dest = await openTab(values.to);
   if (dest.target.tool !== "penpot") throw new Error("copy writes to Penpot");
   const earlier = await dest.session.call(penpotCopyOf, { source: design.source });
   const at = earlier ?? { x: await dest.session.call(penpotFreeX, undefined), y: 0 };
@@ -152,7 +154,15 @@ async function copy(url: string) {
 }
 
 async function open(url: string): Promise<Backend & AsyncDisposable> {
-  const backend = await connect(parseUrl(url));
+  return disposable(await connect(parseUrl(url)));
+}
+
+// Copying runs page functions, so it always needs the tab.
+async function openTab(url: string): Promise<TabBackend & AsyncDisposable> {
+  return disposable(await connectTab(parseUrl(url)));
+}
+
+function disposable<B extends Backend>(backend: B): B & AsyncDisposable {
   return { ...backend, [Symbol.asyncDispose]: async () => backend.close() };
 }
 

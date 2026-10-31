@@ -6,8 +6,9 @@ templates render template.json --data rows.csv|rows.json [--on url] [--format pn
 templates check template.json [--on url]
 ```
 
-`<url>` is a Figma design URL or a Penpot workspace URL. The CLI finds a browser
-tab showing that file, or opens one.
+`<url>` is a Figma design URL or a Penpot workspace URL. With a Penpot token the
+CLI reads a Penpot file over the API; see [engine.md](engine.md). Otherwise it
+finds a browser tab showing that file, or opens one.
 
 ## The frame
 
@@ -16,8 +17,8 @@ tab showing that file, or opens one.
 name one.
 
 An id also names a frame inside another frame, such as one card of a board that
-holds many. In Penpot the board must be on the open page. A name matches the
-frames `pages` lists only.
+holds many. In a Penpot tab the board must be on the open page. A name matches
+the frames `pages` lists only.
 
 ## Fields
 
@@ -139,13 +140,14 @@ row renders one file.
 `--on` finds the frame by the template's frame name, so that name must be unique
 in the other design.
 
-Each variant is a copy of the frame placed beside it, filled, exported and
-deleted. The design is unchanged after a render, and a failed render removes its
-copies too.
+In a tab, each variant is a copy of the frame placed beside it, filled, exported
+and deleted. The design is unchanged after a render, and a failed render removes
+its copies too. Figma exports in the browser, in under a second per variant. A
+Penpot tab exports on Penpot's server: four variants take about 13 seconds, and
+an SVG links its images from the server instead of embedding them.
 
-Figma exports in the browser, in under a second per variant. Penpot exports on
-its server: four variants take about 13 seconds. A Penpot SVG links its images
-from the Penpot server and does not embed them.
+Over the API, Penpot renders on your machine and never edits the design. Two
+variants of a 1080×770 card take under two seconds.
 
 ## Check
 

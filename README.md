@@ -5,10 +5,12 @@ A template names the text and image layers that may change. `render` fills them
 from a CSV or JSON file and exports each row as PNG, JPEG, PDF or SVG. `copy`
 rebuilds a Figma frame in Penpot, and one template renders from either.
 
-The CLI drives your own browser over the Chrome DevTools Protocol. It calls the
-plugin API that the Figma editor and the Penpot workspace load into the page, so
-it needs no API token and no installed plugin. Figma needs edit access to the
-file.
+With a Penpot access token, the CLI reads a Penpot file over Penpot's API and
+draws it with Penpot's own renderer, so it needs no browser. Otherwise, and for
+Figma and `copy`, it drives your own browser over the Chrome DevTools Protocol.
+There it calls the plugin API that the Figma editor and the Penpot workspace
+load into the page, so it needs no Figma token and no installed plugin. Figma
+needs edit access to the file.
 
 ## Install
 
@@ -17,9 +19,12 @@ bun add -g github:caefisica/templates
 ```
 
 This puts `templates` in the directory `bun pm bin -g` prints; add it to `PATH`.
-From a checkout, `mise run install` and `bun link` do the same. Start Chrome
-with `--remote-debugging-port=9222` and log in to Figma and Penpot. Set
-`CDP_URL` when the port is elsewhere.
+From a checkout, `mise run install` and `bun link` do the same.
+
+For Penpot, put an access token in `~/.config/templates/penpot-token`; see
+[docs/engine.md](docs/engine.md). For Figma and `copy`, start Chrome with
+`--remote-debugging-port=9222` and log in to Figma and Penpot. Set `CDP_URL`
+when the port is elsewhere.
 
 ## Example
 
@@ -69,4 +74,5 @@ This writes `out/lima.png`.
 
 - [docs/templates.md](docs/templates.md): fields, data rows and render options.
 - [docs/copy.md](docs/copy.md): copying a design from Figma to Penpot.
+- [docs/engine.md](docs/engine.md): rendering Penpot without a browser.
 - [docs/readme.md](docs/readme.md): the whole manual.
