@@ -13,8 +13,9 @@ export async function writePenpot(args: {
   const p = (globalThis as any)["ɵcontext"];
   if (!p?.currentPage) throw new Error("no Penpot file is open in this tab");
   const { design } = args;
-  const warnings: string[] = [];
+  const warnings = new Set<string>();
   const media = new Map<string, any>();
+  const texts: any[] = [];
 
   const bytes = (base64: string) => Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
 
@@ -54,10 +55,10 @@ export async function writePenpot(args: {
     return out;
   };
 
-  const font = (text: any) => {
+  const fontFor = (text: any) => {
     const family = p.fonts.findByName(text.family);
     if (!family) {
-      warnings.push(`${text.family}: font missing in Penpot`);
+      warnings.add(`${text.family}: font missing in Penpot`);
       return null;
     }
     const style = text.italic ? "italic" : "normal";
@@ -140,12 +141,12 @@ export async function writePenpot(args: {
     try {
       shape.blendMode = node.blend;
     } catch {
-      warnings.push(`${node.name}: ${node.blend} blend unsupported`);
+      warnings.add(`${node.name}: ${node.blend} blend unsupported`);
     }
 
     if (node.kind === "text") {
       const t = node.text;
-      const chosen = font(t);
+      const chosen = fontFor(t);
       if (chosen) chosen.family.applyToText(shape, chosen.variant);
       shape.fontSize = String(t.size);
       shape.lineHeight = String(t.lineHeight);
@@ -157,8 +158,16 @@ export async function writePenpot(args: {
         none: "none",
       }[t.case as string];
       shape.align = t.align;
+      for (const run of t.runs) {
+        const range = shape.getRange(run.start, run.end);
+        const font = fontFor(run);
+        if (font) font.family.applyToRange(range, font.variant);
+        range.fontSize = String(run.size);
+        range.fills = await fills(run);
+      }
       shape.growType = t.grow;
       if (t.grow !== "fixed") shape.resize(node.w, node.h);
+      texts.push(shape);
     }
 
     if (node.kind === "frame") {
@@ -214,6 +223,17 @@ export async function writePenpot(args: {
   };
 
   const root = await create(design.root, { cx: 0, cy: 0, bx: args.x, by: args.y, rotation: 0 });
+  // Penpot lays a text out when its content changes and keeps that layout. A
+  // font still loading then leaves glyphs placed with the fallback's metrics,
+  // which can wrap a word past the box and hide it. Once the fonts are in, a
+  // size change to the first character lays every text out again.
+  await (globalThis as any).document.fonts.ready;
+  for (const text of texts) {
+    const first = text.getRange(0, 1);
+    const size = first.fontSize;
+    first.fontSize = String(Number(size) + 1);
+    first.fontSize = size;
+  }
   root.setSharedPluginData("templates", "source", design.source);
-  return { id: root.id, warnings };
+  return { id: root.id, warnings: [...warnings] };
 }

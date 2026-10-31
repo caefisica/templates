@@ -269,9 +269,14 @@ export async function readFigma(args: { id: string }): Promise<Design> {
   // top. A hidden node has no render bounds, hence the copies.
   const trim = async (n: any): Promise<[number, number]> => {
     if (n.leadingTrim !== "CAP_HEIGHT" || !n.characters.trim()) return [0, 0];
-    await Promise.all(
-      n.getRangeAllFontNames(0, n.characters.length).map((f: any) => figma.loadFontAsync(f)),
-    );
+    // Figma loads only fonts this machine or the team has; others stay unmeasured.
+    const fonts = n.getRangeAllFontNames(0, n.characters.length);
+    try {
+      await Promise.all(fonts.map((f: any) => figma.loadFontAsync(f)));
+    } catch {
+      warnings.add(`${n.name}: font ${fonts[0].family} not loadable, cap-height trim not offset`);
+      return [0, 0];
+    }
     const [cut, full] = [n.clone(), n.clone()];
     try {
       for (const copy of [cut, full]) {
@@ -288,20 +293,38 @@ export async function readFigma(args: { id: string }): Promise<Design> {
     }
   };
 
+  // Figma calls a text's font mixed when this machine lacks the font, even
+  // with one style, so the styles come from the segments, which name it.
   const text = (n: any) => {
-    if (n.getStyledTextSegments(["fontName", "fontSize"]).length > 1)
-      warnings.add(`${n.name}: mixed text styles flattened to the first`);
-    const font = n.fontName === figma.mixed ? n.getRangeFontName(0, 1) : n.fontName;
-    const size = n.fontSize === figma.mixed ? n.getRangeFontSize(0, 1) : n.fontSize;
-    const line = n.lineHeight === figma.mixed ? n.getRangeLineHeight(0, 1) : n.lineHeight;
-    const letter =
-      n.letterSpacing === figma.mixed ? n.getRangeLetterSpacing(0, 1) : n.letterSpacing;
+    const fields = ["fontName", "fontSize", "fontWeight", "fills", "lineHeight", "letterSpacing"];
+    const segments = n.characters.length
+      ? n.getStyledTextSegments(fields)
+      : [Object.fromEntries(fields.map((f) => [f, n[f]]))];
+    const runs = segments.map((s: any) => ({
+      start: s.start ?? 0,
+      end: s.end ?? 0,
+      family: s.fontName.family,
+      weight: s.fontWeight,
+      italic: /italic/i.test(s.fontName.style),
+      size: round(s.fontSize),
+      fills: s.fills
+        .filter((f: any) => f.visible !== false)
+        .map(flat)
+        .filter(Boolean),
+    }));
+    const [{ lineHeight: line, letterSpacing: letter, fontSize: size }] = segments;
+    const same = (field: string) =>
+      segments.every((s: any) => JSON.stringify(s[field]) === JSON.stringify(segments[0][field]));
+    if (!same("lineHeight") || !same("letterSpacing"))
+      warnings.add(`${n.name}: mixed line height or letter spacing flattened to the first`);
+    if (n.paragraphIndent) warnings.add(`${n.name}: paragraph indent dropped`);
     return {
       chars: n.characters,
-      family: font.family,
-      weight: n.fontWeight === figma.mixed ? 400 : n.fontWeight,
-      italic: /italic/i.test(font.style),
-      size: round(size),
+      runs: runs.length > 1 ? runs : [],
+      family: runs[0].family,
+      weight: runs[0].weight,
+      italic: runs[0].italic,
+      size: runs[0].size,
       lineHeight: round(
         line.unit === "PERCENT"
           ? line.value / 100
@@ -324,6 +347,18 @@ export async function readFigma(args: { id: string }): Promise<Design> {
     };
   };
 
+  // CSS has no linear burn or dodge, so they become the nearest CSS mode.
+  const nearBlend: Record<string, string> = { LINEAR_BURN: "multiply", LINEAR_DODGE: "screen" };
+  const blend = (n: any) => {
+    if (!n.blendMode || n.blendMode === "PASS_THROUGH") return "normal";
+    const near = nearBlend[n.blendMode];
+    if (!near) return n.blendMode.toLowerCase().replace("_", "-");
+    warnings.add(
+      `${n.name}: ${n.blendMode.toLowerCase().replace("_", " ")} blend drawn as ${near}`,
+    );
+    return near;
+  };
+
   const read = async (n: any, parent: any): Promise<any> => {
     const base: any = {
       id: n.id,
@@ -331,10 +366,7 @@ export async function readFigma(args: { id: string }): Promise<Design> {
       visible: n.visible,
       ...place(n),
       opacity: n.opacity ?? 1,
-      blend:
-        !n.blendMode || n.blendMode === "PASS_THROUGH"
-          ? "normal"
-          : n.blendMode.toLowerCase().replace("_", "-"),
+      blend: blend(n),
       // A vector's SVG carries its own paints.
       ...(vectorTypes.includes(n.type)
         ? { fills: [], strokes: [] }

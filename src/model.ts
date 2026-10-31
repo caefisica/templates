@@ -51,8 +51,22 @@ export type Layout = {
 
 export type Sizing = "fixed" | "hug" | "fill";
 
+// A span of characters, from `start` up to `end`, in one font, size and paint.
+export type Run = {
+  start: number;
+  end: number;
+  family: string;
+  weight: number;
+  italic: boolean;
+  size: number;
+  fills: Paint[];
+};
+
+// The font and size are the first run's. `runs` lists every run when there are
+// several, and is empty when one style covers the text.
 export type Text = {
   chars: string;
+  runs: Run[];
   family: string;
   weight: number;
   italic: boolean;
