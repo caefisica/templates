@@ -384,25 +384,30 @@
   "The offsets in a paragraph's `text` where its position-data `runs` open a
   new line, the [y height] of each line, and the runs after the paragraph's;
   nil when the runs do not spell the text. A run's y is the bottom of its
-  content area, which runs on one line share, and a line's height is its
-  tallest run's. An empty paragraph has one blank run."
+  content area, so runs of one size on one line share it and a larger run
+  sits lower. A run opens a line when its y differs and it starts left of
+  the previous run's end. A line takes its tallest run's [y height]."
   [text runs]
   (if (empty? text)
     (when-let [{:keys [y height]} (first runs)] [[] [[y height]] (rest runs)])
-    (loop [offset 0 lines [] runs runs breaks []]
+    (loop [offset 0 lines [] runs runs breaks [] prev nil]
       (if (= offset (count text))
         [breaks lines runs]
-        (let [{run :text :keys [y height]} (first runs)
+        (let [{run :text :keys [x y width height] :as r} (first runs)
               end       (+ offset (count run))
-              new-line? (or (empty? lines) (> (abs (- y (first (peek lines)))) 0.5))]
+              new-line? (or (nil? prev)
+                            (and (> (abs (- y (:y prev))) 0.5)
+                                 (< x (- (+ (:x prev) (:width prev)) 0.5))))]
           (when (and (seq run) (<= end (count text))
                      (= (.toLowerCase (subs text offset end)) (.toLowerCase run)))
             (recur end
-                   (if new-line?
-                     (conj lines [y height])
-                     (update-in lines [(dec (count lines)) 1] max height))
+                   (cond
+                     new-line?                        (conj lines [y height])
+                     (> height (second (peek lines))) (conj (pop lines) [y height])
+                     :else                            lines)
                    (rest runs)
-                   (cond-> breaks (and new-line? (seq lines)) (conj offset)))))))))
+                   (cond-> breaks (and new-line? (seq lines)) (conj offset))
+                   r)))))))
 
 (defn- split-lines
   "Cuts a paragraph's `leaves` at each offset in `breaks` into one vector of
@@ -438,10 +443,12 @@
   (js/parseFloat (or (:font-size leaf) (:font-size paragraph) "14")))
 
 (defn- leaf-pitch
-  "The height Skia gives a line of `leaf` in `paragraph`, before rounding."
+  "The pitch the editor gives a line of `leaf` in `paragraph`, before
+  rounding. The editor steps lines by the paragraph's line height and
+  ignores a leaf's."
   [paragraph leaf]
   (* (leaf-font-size paragraph leaf)
-     (js/parseFloat (or (:line-height leaf) (:line-height paragraph) "1.2"))))
+     (js/parseFloat (or (:line-height paragraph) (:line-height leaf) "1.2"))))
 
 (defn- line-pitches
   "The stored pitch of each of `lines` of [pitch top]: the step to the next
@@ -783,6 +790,35 @@
               (assoc-in [:objects id :fills] [])))
           state (subtree (:objects state) root-id)))
 
+(defn- left-letter-spacing
+  "The one letter spacing every leaf of `shape`'s text sets, when every
+  paragraph aligns left or justified; nil otherwise."
+  [{:keys [content]}]
+  (let [nodes  (tree-seq :children :children content)
+        values (->> (filter :text nodes)
+                    (map #(js/parseFloat (or (:letter-spacing %) "0")))
+                    distinct)]
+    (when (and (= 1 (count values)) (not (zero? (first values)))
+               (every? #(contains? #{"left" "justify"} (:text-align % "left"))
+                       (filter #(= "paragraph" (:type %)) nodes)))
+      (first values))))
+
+(defn- letter-spacing-shift
+  "Moves each left-aligned text in the board that sets one letter spacing
+  back by half of it along its baseline. Skia puts half a glyph's letter
+  spacing before it and half after, where the browser puts all of it after,
+  so render-wasm draws such a text half a spacing right of the server export.
+  Centered and right-aligned lines already land where the server draws them."
+  [objects root-id]
+  (reduce (fn [objects id]
+            (let [{:keys [type transform] :as shape} (get objects id)
+                  ls (when (= :text type) (left-letter-spacing shape))]
+              (if ls
+                (let [{:keys [a b]} (or transform (gmt/matrix))]
+                  (update objects id gsh/move (gpt/point (* -0.5 ls a) (* -0.5 ls b))))
+                objects)))
+          objects (subtree objects root-id)))
+
 (defn- svg-pattern-fills
   "Gives each shape in the board whose `fill` is `url(#p)` on an image pattern
   that image as a fill, with its bytes in the state's images. render-wasm
@@ -909,7 +945,7 @@
                                   (provision-images! opts (:objects state) (:images state))])
                           (p/fmap (fn [_]
                                     (layout-texts! (:objects state))
-                                    (let [moved (lay-out state)]
+                                    (let [moved (letter-spacing-shift (lay-out state) frame-id)]
                                       (when-not (identical? moved (:objects state))
                                         (serialize! moved)
                                         (layout-texts! moved))
