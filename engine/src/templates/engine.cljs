@@ -477,12 +477,11 @@
   nearest it, then nearest their pitches rounded up. A half-pixel step
   cannot move a line a whole row, so a line may take a pixel the next line
   gives back. Where heights tie, the one nearest `prefer` wins: the
-  rounded-up pitch, which render-wasm centers as the exporter does. Both
-  renderers draw a line on the whole pixel nearest its baseline, so a line
-  whose baselines differ by a fraction still lands on the same row when both
-  round alike. Skia centers a line's content in its height and puts the
-  target `:offset` below that center, and render-wasm offsets the lines by
-  the vertical align of the box height less theirs. A line with no target
+  rounded-up pitch, which render-wasm centers as the exporter does. Skia
+  centers a line's content in its height, puts the target `:offset` below
+  that center, and rounds that baseline to a whole unit of the paragraph
+  before render-wasm offsets the paragraph by the vertical align of the box
+  height less the lines'. The pixel row then rounds the sum again. A line with no target
   draws nothing and only spaces the others. Targets are measured from the
   board top, and heights from the box top, which sits `shift` below it.
 
@@ -504,10 +503,10 @@
                                         (range (dec (js/Math.floor pitch)) (+ 2 (js/Math.ceil pitch)))))))
                      lines)
         prefer  (fn [pitch] (or center2 (js/Math.ceil pitch)))
-        miss    (fn [top n {:keys [target offset pitch]}]
+        miss    (fn [start top n {:keys [target offset pitch]}]
                   (+ (* 1e-6 (abs (- n (prefer pitch))))
                      (if target
-                       (let [s (+ shift top (/ n 2) offset)]
+                       (let [s (+ shift start (js/Math.round (+ top (/ n 2) offset)))]
                          (+ (abs (- (row s) (row target))) (* 0.001 (abs (- s target)))))
                        0)))
         fit     (fn [total]
@@ -516,7 +515,7 @@
                                 (reduce-kv
                                  (fn [out top [cost heights]]
                                    (reduce (fn [out n]
-                                             (let [cost (+ cost (miss (+ start top) n line))]
+                                             (let [cost (+ cost (miss start top n line))]
                                                (if (some-> (get out (+ top n)) first (<= cost))
                                                  out
                                                  (assoc out (+ top n) [cost (conj heights n)]))))
