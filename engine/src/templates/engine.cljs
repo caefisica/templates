@@ -340,6 +340,74 @@
                 (conj out span))))
           [] spans))
 
+(defn- line-breaks
+  "The offsets in a paragraph's `text` where its position-data `runs` open a
+  new line, and the runs after the paragraph's; nil when the runs do not
+  spell the text. An empty paragraph has one blank run."
+  [text runs]
+  (if (empty? text)
+    [[] (rest runs)]
+    (loop [offset 0 prev-y nil runs runs breaks []]
+      (if (= offset (count text))
+        [breaks runs]
+        (let [{run :text y :y} (first runs)
+              end (+ offset (count run))]
+          (when (and (seq run) (<= end (count text))
+                     (= (.toLowerCase (subs text offset end)) (.toLowerCase run)))
+            (recur end y (rest runs)
+                   (cond-> breaks (and prev-y (> (abs (- y prev-y)) 0.5)) (conj offset)))))))))
+
+(defn- break-leaves
+  "Ends the line at each paragraph offset in `breaks` with a newline, in the
+  leaf that holds the line's last character. When `hold-spaces?`, the spaces
+  before the newline become no-break spaces: the editor counts a line's
+  trailing spaces when it centers or right-aligns it, and Skia counts a
+  no-break space but not a trailing one. A left-aligned line keeps its
+  spaces, since counting them can push a full line over the width."
+  [leaves breaks hold-spaces?]
+  (let [hold #(.replace % #" +$" (fn [spaces] (.repeat (js/String.fromCharCode 0xa0) (count spaces))))]
+    (mapv (fn [leaf start]
+            (let [text  (:text leaf "")
+                  cuts  (keep #(when (< start % (+ start (count text) 1)) (- % start)) breaks)
+                  lines (map #(subs text %1 %2) (cons 0 cuts) (concat cuts [(count text)]))
+                  lines (if hold-spaces? (concat (map hold (butlast lines)) [(last lines)]) lines)]
+              (cond-> leaf
+                (seq cuts) (assoc :text (.join (clj->js lines) "\n")))))
+          leaves (reductions + 0 (map #(count (:text % "")) leaves)))))
+
+(defn- stored-line-breaks
+  "Breaks each paragraph of a text where its position data does. The exporter
+  draws those runs as the editor wrapped them, and Skia's wrap at the same
+  width can move a word. A justified paragraph keeps Skia's wrap, which
+  justifies only soft-wrapped lines; so does a text whose runs do not spell
+  its content."
+  [{:keys [content position-data] :as shape}]
+  (let [paths   (for [[si paragraphs] (map-indexed vector (:children content))
+                      pi             (range (count (:children paragraphs)))]
+                  [:children si :children pi])
+        step    (fn [[content runs] path]
+                  (let [paragraph (get-in content path)
+                        text      (apply str (map #(:text % "") (:children paragraph)))]
+                    (if-let [[breaks runs] (line-breaks text runs)]
+                      [(cond-> content
+                         (and (seq breaks) (not= "justify" (:text-align paragraph)))
+                         (update-in (conj path :children) break-leaves breaks
+                                    (contains? #{"center" "right"} (:text-align paragraph))))
+                       runs]
+                      (reduced nil))))
+        [content' runs] (reduce step [content (seq position-data)] paths)]
+    (if (and content' (empty? runs)) (assoc shape :content content') shape)))
+
+(defn- stored-wraps
+  "Gives the board's texts that no value changed their stored line breaks."
+  [state root-id]
+  (reduce (fn [state id]
+            (cond-> state
+              (and (= :text (get-in state [:objects id :type]))
+                   (not (contains? (:texts state) id)))
+              (update-in [:objects id] stored-line-breaks)))
+          state (subtree (:objects state) root-id)))
+
 (defn- repair-text [content]
   (update content :children
           (fn [sets]
@@ -533,6 +601,7 @@
 (defn- render-variant [opts objects frame-id variant]
   (let [state (-> {:objects (legacy-fill-images objects) :texts #{} :reflow #{} :images {}}
                   (apply-variant frame-id variant)
+                  (stored-wraps frame-id)
                   (svg-fill-precedence frame-id)
                   (svg-pattern-fills frame-id))]
     (serialize! (:objects state))
