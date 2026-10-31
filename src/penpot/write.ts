@@ -26,16 +26,30 @@ export async function writePenpot(args: {
     return media.get(key);
   };
 
+  // Penpot draws a gradient in the shape's unit box, as the model keeps it.
+  const gradient = (g: any) => ({
+    type: g.kind,
+    startX: g.start[0],
+    startY: g.start[1],
+    endX: g.end[0],
+    endY: g.end[1],
+    width: g.width,
+    stops: g.stops,
+  });
+
+  // Penpot lists fills and strokes top first.
   const fills = async (node: any) => {
     const out = [];
-    for (const fill of node.fills)
+    for (const fill of [...node.fills].reverse())
       out.push(
         fill.kind === "solid"
           ? { fillColor: fill.color, fillOpacity: fill.opacity }
-          : {
-              fillImage: { ...(await image(fill.asset)), keepAspectRatio: true },
-              fillOpacity: fill.opacity,
-            },
+          : fill.kind === "image"
+            ? {
+                fillImage: { ...(await image(fill.asset)), keepAspectRatio: true },
+                fillOpacity: fill.opacity,
+              }
+            : { fillColorGradient: gradient(fill), fillOpacity: fill.opacity },
       );
     return out;
   };
@@ -80,11 +94,14 @@ export async function writePenpot(args: {
     else if (node.kind === "rect") shape = p.createRectangle();
     else if (node.kind === "ellipse") shape = p.createEllipse();
     else if (node.kind === "text") shape = p.createText(node.text.chars || " ");
-    else if (node.kind === "svg")
+    else if (node.kind === "svg") {
       shape = p.createShapeFromSvg(
         new TextDecoder().decode(bytes(design.assets[node.asset]!.base64)),
       );
-    else if (node.kind === "group") {
+      // The import puts the group in the board under the viewport centre,
+      // where a flex layout would ignore its position.
+      p.root.appendChild(shape);
+    } else if (node.kind === "group") {
       const children = [];
       for (const child of node.children) children.push(await create(child, at.inner));
       shape = p.group(children);
@@ -98,9 +115,11 @@ export async function writePenpot(args: {
     }
     if (node.kind !== "svg" && node.kind !== "group") shape.fills = await fills(node);
     if (node.strokes.length)
-      shape.strokes = node.strokes.map((s: any) => ({
-        strokeColor: s.color,
-        strokeOpacity: s.opacity,
+      shape.strokes = [...node.strokes].reverse().map((s: any) => ({
+        ...(s.paint.kind === "solid"
+          ? { strokeColor: s.paint.color }
+          : { strokeColorGradient: gradient(s.paint) }),
+        strokeOpacity: s.paint.opacity,
         strokeWidth: s.width,
         strokeAlignment: s.align,
         strokeStyle: "solid",
@@ -114,6 +133,8 @@ export async function writePenpot(args: {
         spread: s.spread,
         color: { color: s.color, opacity: s.opacity },
       }));
+    // Penpot's blur value is the Gaussian deviation its SVG export uses.
+    if (node.blur) shape.blur = { value: node.blur, hidden: false };
     if (node.radius) shape.borderRadius = node.radius;
     shape.opacity = node.opacity;
     try {
@@ -171,8 +192,10 @@ export async function writePenpot(args: {
               child.child.h as string
             ];
             c.verticalSizing = { fixed: "fix", hug: "auto", fill: "fill" }[child.child.v as string];
-            if (child.kind === "text" && !child.child.absolute)
-              [c.topMargin, c.bottomMargin] = child.text.trim.map((v: number) => -v);
+            if (!child.child.absolute)
+              [c.topMargin, c.rightMargin, c.bottomMargin, c.leftMargin] = child.bleed.map(
+                (v: number) => -v,
+              );
           }
           if (child.child.absolute) {
             const again = placeIn(child, at.inner);

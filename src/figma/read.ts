@@ -56,57 +56,166 @@ export async function readFigma(args: { id: string }): Promise<Design> {
     return hash;
   };
 
+  // `gradientTransform` maps the node's unit box to gradient space. There a
+  // linear gradient's stop position is x, and a radial gradient is the circle
+  // of radius 0.5 about (0.5, 0.5).
+  const gradient = (paint: any) => {
+    const [[a, b, c], [d, e, f]] = paint.gradientTransform;
+    const det = a * e - b * d;
+    const back = (x: number, y: number): [number, number] => [
+      (e * (x - c) - b * (y - f)) / det,
+      (a * (y - f) - d * (x - c)) / det,
+    ];
+    const shape = {
+      stops: paint.gradientStops.map((s: any) => ({
+        offset: s.position,
+        color: hex(s.color),
+        opacity: s.color.a,
+      })),
+      opacity: paint.opacity ?? 1,
+    };
+    const start = back(0, 0.5);
+    if (paint.type === "GRADIENT_LINEAR") {
+      // The position a·x + b·y + c grows fastest along (a, b), by a² + b² per unit.
+      const k = a * a + b * b;
+      return {
+        kind: "linear" as const,
+        start,
+        end: [start[0] + a / k, start[1] + b / k],
+        width: 1,
+        ...shape,
+      };
+    }
+    // The circle maps to an ellipse with conjugate radii u and v. Its radius
+    // at angle θ is u·cos θ + v·sin θ, longest at θ = t and shortest at a
+    // right angle to that.
+    const centre = back(0.5, 0.5);
+    const [ux, uy, vx, vy] = [e / 2 / det, -d / 2 / det, -b / 2 / det, a / 2 / det];
+    const t = Math.atan2(2 * (ux * vx + uy * vy), ux ** 2 + uy ** 2 - vx ** 2 - vy ** 2) / 2;
+    const radius = (θ: number) =>
+      [ux * Math.cos(θ) + vx * Math.sin(θ), uy * Math.cos(θ) + vy * Math.sin(θ)] as const;
+    const [major, minor] = [radius(t), radius(t + Math.PI / 2)];
+    return {
+      kind: "radial" as const,
+      start: centre,
+      end: [centre[0] + major[0], centre[1] + major[1]],
+      width: Math.hypot(minor[0], minor[1]) / Math.hypot(major[0], major[1]),
+      ...shape,
+    };
+  };
+
+  const flat = (paint: any) => {
+    if (paint.type === "SOLID")
+      return { kind: "solid" as const, color: hex(paint.color), opacity: paint.opacity ?? 1 };
+    if (paint.type === "GRADIENT_LINEAR" || paint.type === "GRADIENT_RADIAL")
+      return gradient(paint);
+    return undefined;
+  };
+
+  // Figma exports a turned node as its turned drawing in an upright box, but
+  // the model turns the box itself. So an export runs on a page-level copy
+  // with the turn taken out of its transform, flips and skew kept. The model
+  // carries visibility, opacity and effects, so the copy drops them: Penpot
+  // cannot move the raw element an SVG filter becomes. The caller removes
+  // the copy.
+  const upright = (n: any) => {
+    const [[a, b], [c, d]] = n.absoluteTransform;
+    const angle = Math.atan2(c, a);
+    const [cos, sin] = [Math.cos(angle), Math.sin(angle)];
+    const m = [cos * a + sin * c, cos * b + sin * d, cos * c - sin * a, cos * d - sin * b] as const;
+    const copy = n.clone();
+    figma.currentPage.appendChild(copy);
+    try {
+      copy.relativeTransform = [
+        [m[0], m[1], 0],
+        [m[2], m[3], 0],
+      ];
+      copy.visible = true;
+      copy.opacity = 1;
+      copy.effects = [];
+    } catch (error) {
+      copy.remove();
+      throw error;
+    }
+    return { copy, m, cos, sin };
+  };
+
+  // A paint Penpot has no counterpart for becomes a picture of the node's box
+  // filled with that paint alone.
+  const bake = async (n: any, paint: any, index: number) => {
+    let frame = upright(n).copy;
+    try {
+      if (frame.type === "INSTANCE") frame = frame.detachInstance();
+      // A hugging layout would shrink once its children go.
+      if (frame.layoutMode) frame.layoutMode = "NONE";
+      for (const child of frame.children ?? []) child.remove();
+      frame.fills = [{ ...paint, opacity: 1 }];
+      frame.strokes = [];
+      const key = `bake-${n.id}-${index}`;
+      assets[key] = {
+        mime: "image/png",
+        base64: base64(
+          await frame.exportAsync({ format: "PNG", constraint: { type: "SCALE", value: 2 } }),
+        ),
+      };
+      return { kind: "image" as const, asset: key, opacity: paint.opacity ?? 1 };
+    } finally {
+      frame.remove();
+    }
+  };
+
   const paints = async (n: any) => {
     if (!("fills" in n)) return [];
     const list = n.fills === figma.mixed ? n.getStyledTextSegments(["fills"])[0].fills : n.fills;
     const out = [];
-    for (const paint of list) {
+    for (const [index, paint] of list.entries()) {
       if (paint.visible === false) continue;
-      const opacity = paint.opacity ?? 1;
-      if (paint.type === "SOLID")
-        out.push({ kind: "solid" as const, color: hex(paint.color), opacity });
+      const simple = paint.type === "IMAGE" ? undefined : flat(paint);
+      if (simple) out.push(simple);
       else if (paint.type === "IMAGE" && paint.scaleMode === "FILL")
-        out.push({ kind: "image" as const, asset: await imageAsset(paint.imageHash), opacity });
-      else if (paint.type === "IMAGE") {
-        // A cropped or tiled image has no counterpart, so the layer is baked to a picture.
-        const key = `bake-${n.id}`;
-        assets[key] = {
-          mime: "image/png",
-          base64: base64(
-            await n.exportAsync({ format: "PNG", constraint: { type: "SCALE", value: 2 } }),
-          ),
-        };
-        warnings.add(`${n.name}: ${paint.scaleMode.toLowerCase()} image baked to a picture`);
-        out.push({ kind: "image" as const, asset: key, opacity });
-      } else warnings.add(`${n.name}: ${paint.type.toLowerCase()} paint dropped`);
+        out.push({
+          kind: "image" as const,
+          asset: await imageAsset(paint.imageHash),
+          opacity: paint.opacity ?? 1,
+        });
+      else {
+        const what =
+          paint.type === "IMAGE"
+            ? `${paint.scaleMode.toLowerCase()} image`
+            : `${paint.type.toLowerCase()} paint`;
+        if (n.type === "TEXT") warnings.add(`${n.name}: ${what} dropped`);
+        else {
+          out.push(await bake(n, paint, index));
+          warnings.add(`${n.name}: ${what} baked to a picture`);
+        }
+      }
     }
     return out;
   };
 
-  const strokes = (n: any) =>
-    !("strokes" in n) || n.strokeWeight === figma.mixed
-      ? []
-      : n.strokes
-          .filter((s: any) => s.visible !== false && s.type === "SOLID")
-          .map((s: any) => ({
-            color: hex(s.color),
-            opacity: s.opacity ?? 1,
-            width: n.strokeWeight,
-            align:
-              n.strokeAlign === "INSIDE"
-                ? "inner"
-                : n.strokeAlign === "OUTSIDE"
-                  ? "outer"
-                  : "center",
-          }));
-
-  const shadows = (n: any) => {
-    if (!("effects" in n)) return [];
+  const strokes = (n: any) => {
+    if (!("strokes" in n) || n.strokeWeight === figma.mixed) return [];
+    const align =
+      n.strokeAlign === "INSIDE" ? "inner" : n.strokeAlign === "OUTSIDE" ? "outer" : "center";
     const out = [];
+    for (const s of n.strokes) {
+      if (s.visible === false) continue;
+      const paint = s.type === "IMAGE" ? undefined : flat(s);
+      if (paint) out.push({ paint, width: n.strokeWeight, align });
+      else warnings.add(`${n.name}: ${s.type.toLowerCase()} stroke dropped`);
+    }
+    return out;
+  };
+
+  const effects = (n: any) => {
+    const out = { shadows: [] as any[], blur: 0 };
+    if (!("effects" in n)) return out;
     for (const e of n.effects) {
       if (e.visible === false) continue;
-      if (e.type === "DROP_SHADOW" || e.type === "INNER_SHADOW")
-        out.push({
+      // Figma's blur radius is twice the Gaussian deviation its SVG export uses.
+      if (e.type === "LAYER_BLUR" && e.blurType !== "PROGRESSIVE") out.blur = e.radius / 2;
+      else if (e.type === "DROP_SHADOW" || e.type === "INNER_SHADOW")
+        out.shadows.push({
           inner: e.type === "INNER_SHADOW",
           x: e.offset.x,
           y: e.offset.y,
@@ -115,27 +224,31 @@ export async function readFigma(args: { id: string }): Promise<Design> {
           color: hex(e.color),
           opacity: e.color.a,
         });
+      else if (e.type === "LAYER_BLUR") warnings.add(`${n.name}: progressive blur dropped`);
       else warnings.add(`${n.name}: ${e.type.toLowerCase()} dropped`);
     }
     return out;
   };
 
-  // Figma exports a turned node as its turned drawing in an upright box, but
-  // the model turns the box itself. So a copy with the turn taken out of its
-  // transform, flips and skew kept, is exported from the page level.
-  const unrotatedSvg = async (n: any): Promise<string> => {
-    const [[a, b], [c, d]] = n.absoluteTransform;
-    const angle = Math.atan2(c, a);
-    if (Math.abs(angle) < 1e-6) return n.exportAsync({ format: "SVG_STRING" });
-    const [cos, sin] = [Math.cos(angle), Math.sin(angle)];
-    const flat = n.clone();
-    figma.currentPage.appendChild(flat);
+  // The SVG's box is the drawing's, which differs from the node's for a line
+  // or an outside stroke, so the box is placed by the drawing's centre.
+  // Returns null when nothing is drawn.
+  const vectorSvg = async (n: any) => {
+    const { copy: flat, m, cos, sin } = upright(n);
+    const [ma, mb, mc, md] = m;
     try {
-      flat.relativeTransform = [
-        [cos * a + sin * c, cos * b + sin * d, 0],
-        [cos * c - sin * a, cos * d - sin * b, 0],
-      ];
-      return await flat.exportAsync({ format: "SVG_STRING" });
+      const bounds = flat.absoluteRenderBounds;
+      if (!bounds) return null;
+      const svg: string = await flat.exportAsync({ format: "SVG_STRING" });
+      // Figma rounds the SVG's size up to whole pixels.
+      const size = (key: string) => Number(svg.match(new RegExp(`${key}="([\\d.]+)"`))![1]);
+      const [w, h] = [size("width"), size("height")];
+      const dx = bounds.x + w / 2 - (ma * n.width + mb * n.height) / 2;
+      const dy = bounds.y + h / 2 - (mc * n.width + md * n.height) / 2;
+      const box = place(n);
+      const cx = box.x + box.w / 2 + dx * cos - dy * sin;
+      const cy = box.y + box.h / 2 + dx * sin + dy * cos;
+      return { svg, x: round(cx - w / 2), y: round(cy - h / 2), w, h };
     } finally {
       flat.remove();
     }
@@ -222,10 +335,13 @@ export async function readFigma(args: { id: string }): Promise<Design> {
         !n.blendMode || n.blendMode === "PASS_THROUGH"
           ? "normal"
           : n.blendMode.toLowerCase().replace("_", "-"),
-      fills: await paints(n),
-      strokes: strokes(n),
-      shadows: shadows(n),
+      // A vector's SVG carries its own paints.
+      ...(vectorTypes.includes(n.type)
+        ? { fills: [], strokes: [] }
+        : { fills: await paints(n), strokes: strokes(n) }),
+      ...effects(n),
       radius: typeof n.cornerRadius === "number" ? n.cornerRadius : 0,
+      bleed: [0, 0, 0, 0],
     };
     if (parent && parent.layoutMode && parent.layoutMode !== "NONE")
       base.child = {
@@ -234,21 +350,33 @@ export async function readFigma(args: { id: string }): Promise<Design> {
         absolute: n.layoutPositioning === "ABSOLUTE",
       };
     if (vectorTypes.includes(n.type)) {
-      const svg = await unrotatedSvg(n);
+      const drawn = await vectorSvg(n);
+      if (!drawn) {
+        warnings.add(`${n.name}: vector draws nothing, copied as an empty rectangle`);
+        return { ...base, kind: "rect" };
+      }
+      const { svg, ...box } = drawn;
       assets[`svg-${n.id}`] = {
         mime: "image/svg+xml",
         base64: base64(new TextEncoder().encode(svg)),
       };
-      return { ...base, kind: "svg", asset: `svg-${n.id}`, fills: [], strokes: [] };
+      const bleed = [
+        base.y - box.y,
+        box.x + box.w - base.x - base.w,
+        box.y + box.h - base.y - base.h,
+        base.x - box.x,
+      ].map(round);
+      return { ...base, ...box, bleed, kind: "svg", asset: `svg-${n.id}` };
     }
     if (n.type === "TEXT") {
-      const t = { ...text(n), trim: await trim(n) };
+      const [top, bottom] = await trim(n);
       return {
         ...base,
         kind: "text",
-        y: base.y - t.trim[0],
-        h: round(base.h + t.trim[0] + t.trim[1]),
-        text: t,
+        y: base.y - top,
+        h: round(base.h + top + bottom),
+        bleed: [top, 0, bottom, 0],
+        text: text(n),
       };
     }
     if (n.type === "RECTANGLE") return { ...base, kind: "rect" };
