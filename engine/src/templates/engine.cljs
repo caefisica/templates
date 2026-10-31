@@ -15,6 +15,7 @@
    [app.common.geom.point :as gpt]
    [app.common.geom.rect]
    [app.common.geom.shapes :as gsh]
+   [app.common.geom.shapes.bounds :as gsb]
    [app.common.render-wasm.api.props :as props]
    [app.common.render-wasm.api.select :as wselect]
    [app.common.render-wasm.api.upload :as upload]
@@ -464,9 +465,12 @@
     (map - (rest tops) tops)))
 
 (defn- snapped-heights
-  "Whole-pixel heights, each the floor or ceiling of its line's `:pitch`,
-  that put the most of `lines` on the pixel row of their stored `:target`,
-  then nearest it. Both renderers draw a line on the whole pixel nearest its
+  "Whole-pixel heights, each within a pixel of its line's `:pitch`, that put
+  the most of `lines` on the pixel row of their stored `:target`, then
+  nearest it, then nearest their pitches rounded up. A half-pixel step
+  cannot move a line a whole row, so a line may take a pixel the next line
+  gives back. Where heights tie, as in a centered one-line box, the
+  rounded-up pitch is the one render-wasm centers as the exporter does. Both renderers draw a line on the whole pixel nearest its
   baseline, so a line whose baselines differ by a fraction still lands on the
   same row when both round alike. Skia centers a line's content in its height
   and puts the target `:offset` below that center, and render-wasm offsets
@@ -477,13 +481,14 @@
   [lines box-height valign shift scale]
   (let [row     #(js/Math.round (* % scale))
         options (map (fn [{:keys [pitch]}]
-                       (distinct [(max 1 (js/Math.floor pitch)) (max 1 (js/Math.ceil pitch))]))
+                       (distinct (map #(max 1 %) (range (dec (js/Math.floor pitch)) (+ 2 (js/Math.ceil pitch))))))
                      lines)
-        miss    (fn [top n {:keys [target offset]}]
-                  (if target
-                    (let [s (+ shift top (/ n 2) offset)]
-                      (+ (abs (- (row s) (row target))) (* 0.001 (abs (- s target)))))
-                    0))
+        miss    (fn [top n {:keys [target offset pitch]}]
+                  (+ (* 1e-6 (abs (- n (js/Math.ceil pitch))))
+                     (if target
+                       (let [s (+ shift top (/ n 2) offset)]
+                         (+ (abs (- (row s) (row target))) (* 0.001 (abs (- s target)))))
+                       0)))
         fit     (fn [total]
                   (let [start (case valign "bottom" (- box-height total) "center" (/ (- box-height total) 2) 0)
                         step  (fn [states [line ns]]
@@ -506,25 +511,47 @@
   "Where the exporter draws the line on the board, as {:target :offset} for
   `snapped-heights`; nil for a blank line. It draws each run as SVG text at
   the run's y on the ideographic baseline, which Chrome puts the font's
-  descent, rounded at the render `scale`, above the baseline. Chrome works
-  in single floats, so a y a double's error short of a half pixel is the
-  half pixel there and rounds up. The line's largest leaf sets it. Without
-  that font's metrics the target is the run's center, which Skia's content
-  center meets."
-  [{:keys [metrics board-y scale]} paragraph line [y height]]
+  descent, rounded at the render `scale`, above the baseline. Chrome maps
+  the board's y through the viewBox in single floats, so a y a float's error
+  short of a half pixel is the half pixel there and rounds up. The line's
+  largest leaf sets it. Without that font's metrics the target is the run's
+  center, which Skia's content center meets."
+  [{:keys [metrics board-y scale vb-scale vb-shift]} paragraph line [y height]]
   (let [measure (fn [leaf]
                   (when-let [{:keys [ascent descent]} (get metrics (family-key (leaf-family paragraph leaf)))]
                     (let [size (leaf-font-size paragraph leaf)]
                       [size (* size ascent) (* size descent)])))
         fonts   (map measure line)
-        f32     js/Math.fround]
+        f32     js/Math.fround
+        on-page #(+ (f32 (* (f32 vb-scale) (f32 (- % board-y)))) vb-shift)]
     (cond
       (re-matches #"\s*" (apply str (map #(:text % "") line))) nil
       (every? some? fonts)
       (let [[_ _ d] (apply max-key first fonts)]
-        {:target (f32 (- (f32 (- (f32 y) (/ (js/Math.round (* d scale)) scale))) (f32 board-y)))
+        {:target (- (on-page y) (/ (js/Math.round (* d scale)) scale))
          :offset (apply max (map (fn [[_ a d]] (/ (- a d) 2)) fonts))})
-      :else {:target (- y (/ height 2) board-y) :offset 0})))
+      :else {:target (on-page (- y (/ height 2))) :offset 0})))
+
+(defn- export-viewbox
+  "The exporter's SVG viewBox transform for board `frame-id`, as the
+  `:vb-scale` and `:vb-shift` that take a y on the board to Chrome's page y.
+  The SVG's width, height and viewBox are the board's bounds to three
+  decimals, as `render.cljs` formats them. Chrome lays the SVG box out in
+  1/64 px units, scales the viewBox to fit it, centered, and floors the
+  translation to the same unit."
+  [objects frame-id]
+  (let [frame  (get objects frame-id)
+        bounds (gsb/get-object-bounds objects frame {:ignore-margin? false})
+        fixed  #(js/parseFloat (.toFixed % 3))
+        unit   #(/ (js/Math.floor (* % 64)) 64)
+        top    (fixed (- (:y bounds) (get-in frame [:selrect :y])))
+        width  (fixed (:width bounds))
+        height (fixed (:height bounds))]
+    (if (and (pos? width) (pos? height))
+      (let [s (min (/ (unit width) width) (/ (unit height) height))]
+        {:vb-scale s
+         :vb-shift (unit (- (/ (- (unit height) (* height s)) 2) (* top s)))})
+      {:vb-scale 1 :vb-shift 0})))
 
 (defn- stored-pitch
   "Gives each line of `paragraphs` the whole-pixel height its stored runs
@@ -824,9 +851,10 @@
                   (apply-variant frame-id variant))]
     (->> (font-metrics opts (:objects state) frame-id)
          (p/mcat (fn [metrics]
-                   (let [ctx   {:metrics metrics
-                                :board-y (get-in objects [frame-id :selrect :y] 0)
-                                :scale   (:scale opts)}
+                   (let [ctx   (merge {:metrics metrics
+                                       :board-y (get-in objects [frame-id :selrect :y] 0)
+                                       :scale   (:scale opts)}
+                                      (export-viewbox objects frame-id))
                          state (-> state
                                    (stored-wraps frame-id ctx)
                                    (svg-fill-precedence frame-id)
