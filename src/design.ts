@@ -13,7 +13,7 @@ export type Layer = { path: string; kind: "text" | "image"; value: string; count
 // row per item, each filled from the item's values, keyed by path below the row.
 export type Value =
   | { kind: "text"; text: string }
-  | { kind: "image"; mime: string; base64: string }
+  | { kind: "image"; mime: string; width: number; height: number; base64: string }
   | { kind: "hidden" }
   | { kind: "list"; items: Variant[] };
 
