@@ -7,10 +7,10 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import type { Layer } from "../design";
 
-const release = "engine-723267c-13";
+const release = "engine-723267c-14";
 
 const sha256: Record<string, string> = {
-  "engine.js": "bb0eb9724d584c95ec3dfefccfd540325b16d9ff430bf3827f89bbb8d9001838",
+  "engine.js": "e68232b3c95cd97b6b2c35e35dd4e872ca08aeb46dee416f430199bfe4489744",
   "render-wasm.js": "d36f8fb63eee2799e2e95e813c925c5b823db16071ba5c02240ec85a54fd46eb",
   "render-wasm.wasm": "adfe57803b9a77bccdeeadddd37746050cc6ef9c3345ce836c040b8a80477b36",
 };
