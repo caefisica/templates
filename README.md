@@ -13,13 +13,13 @@ file.
 ## Install
 
 ```sh
-mise run install
-bun link
+bun add -g github:caefisica/templates
 ```
 
-`bun link` puts `templates` in the directory `bun pm bin -g` prints; add it to
-`PATH`. Start Chrome with `--remote-debugging-port=9222` and log in to Figma and
-Penpot. Set `CDP_URL` when the port is elsewhere.
+This puts `templates` in the directory `bun pm bin -g` prints; add it to `PATH`.
+From a checkout, `mise run install` and `bun link` do the same. Start Chrome
+with `--remote-debugging-port=9222` and log in to Figma and Penpot. Set
+`CDP_URL` when the port is elsewhere.
 
 ## Example
 
