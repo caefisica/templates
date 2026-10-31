@@ -1,0 +1,18 @@
+diff --git a/render-wasm/src/render/raster.rs b/render-wasm/src/render/raster.rs
+index 5bd001a..493aeae 100644
+--- a/render-wasm/src/render/raster.rs
++++ b/render-wasm/src/render/raster.rs
+@@ -104,8 +104,11 @@ pub fn render_to_raster(
+     // strokes/shadows/blur. Other shapes use full extrect.
+     let bounds = shape.export_root_bounds(tree, scale);
+ 
+-    let width = (bounds.width() * scale).ceil() as i32;
+-    let height = (bounds.height() * scale).ceil() as i32;
++    // Bounds are f32, so a board far from the origin measures a hair over its
++    // whole-pixel size (1390.0005 at x = 6359); without the tolerance the
++    // export would gain a transparent pixel row and column.
++    let width = (bounds.width() * scale - 0.01).ceil() as i32;
++    let height = (bounds.height() * scale - 0.01).ceil() as i32;
+     if width <= 0 || height <= 0 {
+         return Ok((Vec::new(), 0, 0));
+     }
