@@ -2,7 +2,7 @@ import { afterAll, beforeAll, expect, test } from "bun:test";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Variant } from "../design";
+import type { FrameInfo, Variant } from "../design";
 import { headless } from "./headless";
 
 const root = "00000000-0000-0000-0000-000000000000";
@@ -15,7 +15,8 @@ const shape = (id: string, type: string, parentId: string, shapes: string[] = []
   width: 10.4,
   height: 20,
 });
-// Page p1 holds boards b1 and b2 and a rect; b2 holds board inner. Page p2 holds b3.
+// Page p1 holds boards b1 and b2 and a rect; b2 holds board inner. Page p2 holds
+// b3 and a b1 of its own, as a duplicated page keeps its shapes' ids.
 const file = {
   data: {
     pages: ["p1", "p2"],
@@ -32,7 +33,11 @@ const file = {
       },
       p2: {
         name: "Two",
-        objects: { [root]: shape(root, "frame", root, ["b3"]), b3: shape("b3", "frame", root) },
+        objects: {
+          [root]: shape(root, "frame", root, ["b3", "b1"]),
+          b3: shape("b3", "frame", root),
+          b1: shape("b1", "frame", root),
+        },
       },
     },
   },
@@ -91,11 +96,18 @@ test("pages list each page's top-level boards in layer order", async () => {
       id: "p1",
       name: "One",
       frames: [
-        { id: "b2", name: "b2", w: 10, h: 20 },
-        { id: "b1", name: "b1", w: 10, h: 20 },
+        { id: "b2", name: "b2", w: 10, h: 20, page: "p1" },
+        { id: "b1", name: "b1", w: 10, h: 20, page: "p1" },
       ],
     },
-    { id: "p2", name: "Two", frames: [{ id: "b3", name: "b3", w: 10, h: 20 }] },
+    {
+      id: "p2",
+      name: "Two",
+      frames: [
+        { id: "b3", name: "b3", w: 10, h: 20, page: "p2" },
+        { id: "b1", name: "b1", w: 10, h: 20, page: "p2" },
+      ],
+    },
   ]);
   expect(requests.at(-1)).toMatchObject({
     url: "https://penpot.test/api/main/methods/get-file",
@@ -105,23 +117,42 @@ test("pages list each page's top-level boards in layer order", async () => {
 
 test("a frame is found at any depth on any page, and only a board", async () => {
   const backend = headless(target, "k");
-  expect(await backend.frame("inner")).toEqual({ id: "inner", name: "inner", w: 10, h: 20 });
-  expect(await backend.frame("b3")).toMatchObject({ id: "b3" });
+  expect(await backend.frame("inner")).toEqual({
+    id: "inner",
+    name: "inner",
+    w: 10,
+    h: 20,
+    page: "p1",
+  });
+  expect(await backend.frame("b3")).toMatchObject({ id: "b3", page: "p2" });
+  expect(await backend.frame("b1")).toMatchObject({ page: "p1" });
+  expect(await backend.frame("b1", "p2")).toMatchObject({ page: "p2" });
+  expect(await backend.frame("b3", "p1")).toBeNull();
+  expect(await backend.frame("b3", "elsewhere")).toBeNull();
   expect(await backend.frame("r")).toBeNull();
   expect(await backend.frame("1:2")).toBeNull();
 });
 
+const at = (id: string, page: string): FrameInfo => ({ id, name: id, w: 10, h: 20, page });
+
 test("layers read the page of the frame's top-level board", async () => {
-  const [layer] = await headless(target, "k").layers("inner");
+  const [layer] = await headless(target, "k").layers(at("inner", "p1"));
   expect(layer!.path).toBe(
     'page:["^ ","~:file-id","~uf","~:page-id","~up1","~:object-id",["~#set",["~ub2"]]] inner',
   );
 });
 
+test("a frame id that two pages hold reads the frame's own page", async () => {
+  const backend = headless(target, "k");
+  const page = async (p: string) => (await backend.layers(at("b1", p)))[0]!.path;
+  expect(await page("p1")).toContain('"~up1"');
+  expect(await page("p2")).toContain('"~up2"');
+});
+
 test("render yields one export per variant and signs only its own asset requests", async () => {
   const out: string[] = [];
   const variants: Variant[] = [{ a: { kind: "hidden" } }, {}];
-  for await (const bytes of headless(target, "k").render("b3", variants, "png", 2))
+  for await (const bytes of headless(target, "k").render(at("b3", "p2"), variants, "png", 2))
     out.push(new TextDecoder().decode(bytes));
   expect(out.map((o) => JSON.parse(o))).toEqual([
     ["b3", [variants[0]], "png", 2, process.env.TEMPLATES_ENGINE, "fonts", true, false],
@@ -139,5 +170,7 @@ test("an RPC error names the method and status", async () => {
 });
 
 test("a frame missing from the file is refused", async () => {
-  await expect(headless(target, "k").layers("zz")).rejects.toThrow("no frame zz in this file");
+  await expect(headless(target, "k").layers(at("zz", "p1"))).rejects.toThrow(
+    "no frame zz in this file",
+  );
 });

@@ -7,12 +7,12 @@ import { parseArgs } from "node:util";
 import { type Backend, connect, connectTab, type TabBackend } from "./backend";
 import { formats, type Format, type FrameInfo, type Layer } from "./design";
 import { readFigma } from "./figma/read";
-import { frameRuns, pickPage } from "./frames";
+import { frameRuns, pickFrame, pickPage } from "./frames";
 import { plan, readRows, variant } from "./data";
 import { penpotCopyOf, penpotFreeX, penpotRemove } from "./penpot/page";
 import { writePenpot } from "./penpot/write";
 import { chooseFields, drift, type Template } from "./template";
-import { parseUrl } from "./url";
+import { parseUrl, type Target } from "./url";
 
 const usage = `usage:
   templates pages <url> [--page P]              list pages and their frames
@@ -82,7 +82,7 @@ async function pages(url: string) {
 async function layers(url: string) {
   await using backend = await open(url);
   const frame = await findFrame(backend, values.frame);
-  printLayers(await backend.layers(frame.id));
+  printLayers(await backend.layers(frame));
 }
 
 async function init(url: string) {
@@ -90,8 +90,13 @@ async function init(url: string) {
   if (await Bun.file(out).exists()) throw new Error(`${out} exists; pass another --out`);
   await using backend = await open(url);
   const frame = await findFrame(backend, values.frame);
-  const fields = chooseFields(await backend.layers(frame.id), values.field!, values.list!);
-  const template: Template = { design: url, frame: { id: frame.id, name: frame.name }, fields };
+  const fields = chooseFields(await backend.layers(frame), values.field!, values.list!);
+  const { id, name, page } = frame;
+  const template: Template = {
+    design: url,
+    frame: { id, name, ...(page && { page }) },
+    fields,
+  };
   await Bun.write(out, JSON.stringify(template, null, 2) + "\n");
   console.log(`${out}: ${frame.name}`);
   for (const f of fields) {
@@ -115,7 +120,7 @@ async function render(templatePath: string) {
   await using backend = await open(values.on ?? template.design);
   const frame = await templateFrame(backend, template);
   let i = 0;
-  for await (const bytes of backend.render(frame.id, variants, format, Number(values.scale))) {
+  for await (const bytes of backend.render(frame, variants, format, Number(values.scale))) {
     const path = join(outDir, `${plans[i++]!.file}.${format}`);
     await Bun.write(path, bytes);
     console.log(`${path}  ${Math.round(bytes.length / 1024)} KB`);
@@ -126,7 +131,7 @@ async function check(templatePath: string) {
   const template = await readTemplate(templatePath);
   await using backend = await open(values.on ?? template.design);
   const frame = await templateFrame(backend, template);
-  const problems = drift(template, await backend.layers(frame.id));
+  const problems = drift(template, await backend.layers(frame));
   if (problems.length === 0)
     return console.log(`${frame.name}: all ${template.fields.length} fields match`);
   for (const line of problems) console.log(line);
@@ -142,9 +147,18 @@ async function copy(url: string) {
 
   await using dest = await openTab(values.to);
   if (dest.target.tool !== "penpot") throw new Error("copy writes to Penpot");
-  const earlier = await dest.session.call(penpotCopyOf, { source: design.source });
-  const at = earlier ?? { x: await dest.session.call(penpotFreeX, undefined), y: 0 };
-  const made = await dest.session.call(writePenpot, { design, x: at.x, y: at.y });
+  const earlier = await dest.session.call(penpotCopyOf, {
+    source: design.source,
+  });
+  const at = earlier ?? {
+    x: await dest.session.call(penpotFreeX, undefined),
+    y: 0,
+  };
+  const made = await dest.session.call(writePenpot, {
+    design,
+    x: at.x,
+    y: at.y,
+  });
   if (earlier) await dest.session.call(penpotRemove, { id: earlier.id });
   console.log(
     `${frame.name} → Penpot board ${made.id}` + (earlier ? `, replacing ${earlier.id}` : ""),
@@ -174,31 +188,35 @@ async function readTemplate(path: string): Promise<Template> {
 async function findFrame(backend: Backend, wanted: string | undefined): Promise<FrameInfo> {
   const target = backend.target;
   const key = wanted ?? (target.tool === "figma" ? target.frame : undefined);
-  const frames = (await backend.pages()).flatMap((p) => p.frames);
-  if (!key)
+  const pages = await backend.pages();
+  if (!key) {
+    const frames = pages.flatMap((p) => p.frames);
     throw new Error(
       `name a frame with --frame:\n${frames.map((f) => `  ${f.id}  ${f.name}`).join("\n")}`,
     );
-  return pickFrame(frames, key, await backend.frame(key));
+  }
+  const page = urlPage(target);
+  return pickFrame(pages, key, page) ?? (await backend.frame(key, page)) ?? missing(key);
 }
 
 // The template's frame by id on its own design, by name on any other.
 async function templateFrame(backend: Backend, template: Template): Promise<FrameInfo> {
-  const frames = (await backend.pages()).flatMap((p) => p.frames);
+  const pages = await backend.pages();
+  const { id, name, page = urlPage(backend.target) } = template.frame;
   return (
-    frames.find((f) => f.id === template.frame.id) ??
-    (await backend.frame(template.frame.id)) ??
-    pickFrame(frames, template.frame.name)
+    pickFrame(pages, id, page) ??
+    (await backend.frame(id, page)) ??
+    pickFrame(pages, name) ??
+    missing(name)
   );
 }
 
-// A name matches top-level frames only; `byId` is the frame the id names at any depth.
-function pickFrame(frames: FrameInfo[], key: string, byId?: FrameInfo | null): FrameInfo {
-  if (byId) return byId;
-  const found = frames.filter((f) => f.id === key || f.name === key);
-  if (found.length === 1) return found[0]!;
-  if (found.length > 1)
-    throw new Error(`${found.length} frames are named "${key}"; pass an id with --frame`);
+// The page a Penpot URL opens, which settles an id that several pages hold.
+function urlPage(target: Target): string | undefined {
+  return target.tool === "penpot" ? target.page : undefined;
+}
+
+function missing(key: string): never {
   throw new Error(`no frame "${key}"; list them with the pages command`);
 }
 

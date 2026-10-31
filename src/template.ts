@@ -12,8 +12,13 @@ export type List = { name: string; layer: string; kind: "list"; fields: Leaf[] }
 
 export type Field = Leaf | List;
 
-// `frame.id` pins the frame on `design`; on another design the name finds it.
-export type Template = { design: string; frame: { id: string; name: string }; fields: Field[] };
+// `frame.id`, with `frame.page` on Penpot, pins the frame on `design`; on another
+// design the name finds it.
+export type Template = {
+  design: string;
+  frame: { id: string; name: string; page?: string };
+  fields: Field[];
+};
 
 // A layer named "#title" is the field "title"; "#11" is no field name and is
 // skipped. These are the template's
