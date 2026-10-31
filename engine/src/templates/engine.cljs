@@ -385,6 +385,30 @@
                (nil? more) (= "image" (some-> image :tag name)) (unit? w) (unit? h))
       (some-> (data-url (href image)) (assoc :width w :height h)))))
 
+(defn- svg-fill-wins?
+  "True when Penpot's SVG renderer paints the shape with its `:svg-attrs` fill
+  rather than its fills: the fills render as a `url(#fill-…)` attribute, a
+  gradient, an image or several fills, and the imported `fill` attribute
+  overrides it (ui/shapes/attrs.cljs, add-fill-props!). A single colour fill
+  goes in the style and wins."
+  [shape]
+  (let [fills (:fills shape)]
+    (and (some? (get-in shape [:svg-attrs :fill]))
+         (not= :image (:type shape))
+         (boolean (or (> (count fills) 1)
+                      (some :fill-color-gradient fills)
+                      (some :fill-image fills))))))
+
+(defn- svg-fill-precedence
+  "Drops the fills of every shape whose imported `fill` attribute wins, so
+  render-wasm derives the fill from the attribute as the SVG renderer paints it."
+  [state root-id]
+  (reduce (fn [state id]
+            (cond-> state
+              (svg-fill-wins? (get-in state [:objects id]))
+              (assoc-in [:objects id :fills] [])))
+          state (subtree (:objects state) root-id)))
+
 (defn- svg-pattern-fills
   "Gives each shape in the board whose `fill` is `url(#p)` on an image pattern
   that image as a fill, with its bytes in the state's images. render-wasm
@@ -494,6 +518,7 @@
 (defn- render-variant [opts objects frame-id variant]
   (let [state (-> {:objects objects :texts #{} :reflow #{} :images {}}
                   (apply-variant frame-id variant)
+                  (svg-fill-precedence frame-id)
                   (svg-pattern-fills frame-id))]
     (serialize! (:objects state))
     (wasm/clear-fonts!)
