@@ -1,0 +1,15 @@
+diff --git a/render-wasm/src/render/vector.rs b/render-wasm/src/render/vector.rs
+--- a/render-wasm/src/render/vector.rs
++++ b/render-wasm/src/render/vector.rs
+@@ -940,7 +940,10 @@ fn render_frame(
+     // so it extends outside the frame bounds.
+     render_container_drop_shadows(shared, canvas, element, tree, scale, true, opts)?;
+
+-    let needs_layer = element.needs_layer();
++    // A clipping frame isolates its children's blend modes, as CSS does for
++    // an element with a clip-path: a blended child composites against the
++    // frame's layer, not the backdrop behind the frame.
++    let needs_layer = element.needs_layer() || element.clip_content;
+
+     if needs_layer {
+         let mut paint = Paint::default();

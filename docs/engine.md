@@ -19,8 +19,9 @@ SVG embeds its images.
 ## The engine files
 
 On first use the CLI downloads the engine, about 5 MB, from this repository's
-`engine-723267c` release into `~/.cache/templates/engine-723267c/`, and checks
-each file against the hash in [src/penpot/engine.ts](../src/penpot/engine.ts).
+`engine-723267c-2` release into `~/.cache/templates/engine-723267c-2/`, and
+checks each file against the hash in
+[src/penpot/engine.ts](../src/penpot/engine.ts).
 
 | File               | Holds                                                      |
 | ------------------ | ---------------------------------------------------------- |
@@ -38,17 +39,19 @@ TEMPLATES_ENGINE=$PWD/engine/dist templates render template.json --data rows.jso
 ```
 
 The script fetches Penpot at a pinned commit and emsdk into `ENGINE_WORK`
-(default `~/.cache/templates/engine-build`), builds the renderer, compiles
+(default `~/.cache/templates/engine-build`), applies the fixes in
+[engine/patches/](../engine/patches/) to Penpot, builds the renderer, compiles
 [engine/src/templates/engine.cljs](../engine/src/templates/engine.cljs) with
 Penpot's ClojureScript, and writes the three files to `engine/dist/`. It needs
 git, rustup, Java 25, the Clojure CLI, Node and pnpm.
 
 A new build has new hashes. To ship it, gzip each file with `gzip -9 -n`, attach
-the `.gz` files to a release named after the Penpot commit, and update the
-release name and hashes in `src/penpot/engine.ts`.
+the `.gz` files to a release named after the Penpot commit and a build number
+(`engine-723267c-2`), and update the release name and hashes in
+`src/penpot/engine.ts`.
 
 ## Licence
 
 `engine.js` and `render-wasm.*` contain Penpot, licensed MPL-2.0. Their source
-is Penpot at the commit `engine/build.sh` names, with `engine/src` and
-`engine/shadow-cljs.edn` from this repository.
+is Penpot at the commit `engine/build.sh` names, with `engine/patches`,
+`engine/src` and `engine/shadow-cljs.edn` from this repository.

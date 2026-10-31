@@ -1,0 +1,12 @@
+diff --git a/render-wasm/src/render/vector.rs b/render-wasm/src/render/vector.rs
+index 5bb8c47..63ad5f6 100644
+--- a/render-wasm/src/render/vector.rs
++++ b/render-wasm/src/render/vector.rs
+@@ -1226,6 +1226,7 @@ fn draw_image_fill(
+ 
+     let mut paint = Paint::default();
+     paint.set_anti_alias(true);
++    paint.set_alpha(image_fill.opacity());
+     if let Some(filter) = blur_filter {
+         paint.set_image_filter(filter.clone());
+     }
