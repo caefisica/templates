@@ -80,7 +80,9 @@ export class Session {
       returnByValue: true,
     });
     if (result.exceptionDetails) {
-      const detail = result.exceptionDetails.exception?.description ?? result.exceptionDetails.text;
+      // A thrown string or other non-Error has a value and no description.
+      const { exception, text } = result.exceptionDetails;
+      const detail = exception?.description ?? exception?.value ?? text;
       throw new Error(`page threw: ${detail}`);
     }
     return result.result.value as T;
