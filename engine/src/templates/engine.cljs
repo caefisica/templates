@@ -305,6 +305,107 @@
 
 ;; --- layout
 
+(defn- high-surrogate? [code] (<= 0xd800 code 0xdbff))
+
+(defn- join-surrogates
+  "Moves a low surrogate that opens a span onto the span before it, when that
+  span ends in a high surrogate. The workspace can split an emoji across two
+  spans; the wasm reads span lengths as UTF-8 of each half, which overruns the
+  paragraph's UTF-8 buffer and panics."
+  [spans]
+  (reduce (fn [out span]
+            (let [prev (peek out)
+                  text (:text span "")
+                  head (:text prev "")]
+              (if (and prev (seq text) (seq head)
+                       (high-surrogate? (.charCodeAt head (dec (count head))))
+                       (<= 0xdc00 (.charCodeAt text 0) 0xdfff))
+                (conj (pop out) (assoc prev :text (str head (subs text 0 1)))
+                      (assoc span :text (subs text 1)))
+                (conj out span))))
+          [] spans))
+
+(defn- repair-text [content]
+  (update content :children
+          (fn [sets]
+            (mapv (fn [set]
+                    (update set :children
+                            (fn [paragraphs] (mapv #(update % :children join-surrogates) paragraphs))))
+                  sets))))
+
+(defn- svg-strokes
+  "The stroke an imported SVG shape keeps only in its `:svg-attrs`. render-wasm
+  derives fills from those attributes but not strokes, so without this an
+  imported outline draws nothing. Colour and gradient parse as a fill would."
+  [shape]
+  (let [attrs (:svg-attrs shape)
+        paint (some-> (svg-derived/svg-fill->fills
+                       (assoc shape :svg-attrs (cond-> {:fill (:stroke attrs)}
+                                                 (:strokeOpacity attrs)
+                                                 (assoc :fillOpacity (:strokeOpacity attrs)))))
+                      first)
+        cap   ({"round" :round "square" :square} (:strokeLinecap attrs))]
+    (when paint
+      [(cond-> {:stroke-style     :solid
+                :stroke-alignment :center
+                :stroke-width     (d/parse-double (:strokeWidth attrs "1") 1)
+                :stroke-opacity   (:fill-opacity paint 1)}
+         (:fill-color paint)          (assoc :stroke-color (:fill-color paint))
+         (:fill-color-gradient paint) (assoc :stroke-color-gradient (:fill-color-gradient paint))
+         cap                          (assoc :stroke-cap-start cap :stroke-cap-end cap))])))
+
+(defn- data-url [href]
+  (when-let [[_ mime base64] (re-matches #"data:([^;,]+);base64,(.*)" (str href))]
+    {:mime mime :bytes (js/Buffer.from base64 "base64")}))
+
+(defn- def-node [defs id]
+  (or (get defs (keyword id)) (get defs id)))
+
+(defn- pattern-image
+  "The image an SVG pattern stretches over its shape's box: a pattern in
+  objectBoundingBox content units holding one image, directly or through a
+  `use` scaled to 1x1. Nil for any other pattern."
+  [defs id]
+  (let [pattern (def-node defs id)
+        [child & more] (:content pattern)
+        href    #(or (get-in % [:attrs :xlinkHref]) (get-in % [:attrs :href]))
+        image   (case (some-> child :tag name)
+                  "image" child
+                  "use"   (some->> (href child) (re-matches #"#(.+)") second (def-node defs))
+                  nil)
+        w       (d/parse-double (get-in image [:attrs :width]))
+        h       (d/parse-double (get-in image [:attrs :height]))
+        scale   (if (= "use" (some-> child :tag name))
+                  (some->> (get-in child [:attrs :transform]) (re-matches #"scale\(\s*([-\d.e]+)\s*\)")
+                           second d/parse-double)
+                  1)
+        unit?   #(and % scale (< (js/Math.abs (- 1 (* % scale))) 0.01))]
+    (when (and (= "pattern" (some-> pattern :tag name))
+               (= "objectBoundingBox" (get-in pattern [:attrs :patternContentUnits]))
+               (nil? more) (= "image" (some-> image :tag name)) (unit? w) (unit? h))
+      (some-> (data-url (href image)) (assoc :width w :height h)))))
+
+(defn- svg-pattern-fills
+  "Gives each shape in the board whose `fill` is `url(#p)` on an image pattern
+  that image as a fill, with its bytes in the state's images. render-wasm
+  derives colour and gradient fills from SVG attributes, not patterns."
+  [state root-id]
+  (reduce (fn [state id]
+            (let [shape (get-in state [:objects id])
+                  ref   (some->> (get-in shape [:svg-attrs :fill])
+                                 (re-matches #"url\(\s*['\"]?#([^)'\"]+)['\"]?\s*\)") second)
+                  image (when (and ref (empty? (:fills shape))) (pattern-image (:svg-defs shape) ref))]
+              (if image
+                (let [image-id (uuid/next)]
+                  (-> state
+                      (assoc-in [:images image-id] {:bytes (:bytes image)})
+                      (assoc-in [:objects id :fills]
+                                [{:fill-opacity 1
+                                  :fill-image   {:id image-id :width (:width image) :height (:height image)
+                                                 :mtype (:mime image) :keep-aspect-ratio false}}])))
+                state)))
+          state (subtree (:objects state) root-id)))
+
 (defn- set-shape!
   "app.wasm.serialize/set-shape!, with the flex and layout-item records the
   exporter leaves out because it never moves a shape."
@@ -315,8 +416,9 @@
     (when (and (#{:path :bool} (:type shape)) (some? (:content shape)))
       (props/set-shape-path-content (:content shape)))
     (props/write-shape-fills! (:fills shape))
-    (when-not (= :group (:type shape)) (props/write-shape-strokes! (:strokes shape)))
-    (when (= :text (:type shape)) (wtext/set-shape-text! (:content shape)))))
+    (when-not (= :group (:type shape))
+      (props/write-shape-strokes! (or (not-empty (:strokes shape)) (svg-strokes shape))))
+    (when (= :text (:type shape)) (wtext/set-shape-text! (repair-text (:content shape))))))
 
 (defn- serialize! [objects]
   (h/call rw/internal-module "_init_shapes_pool" (count objects))
@@ -390,7 +492,9 @@
     (wasm/render-shape-raster frame-id scale :png)))
 
 (defn- render-variant [opts objects frame-id variant]
-  (let [state (apply-variant {:objects objects :texts #{} :reflow #{} :images {}} frame-id variant)]
+  (let [state (-> {:objects objects :texts #{} :reflow #{} :images {}}
+                  (apply-variant frame-id variant)
+                  (svg-pattern-fills frame-id))]
     (serialize! (:objects state))
     (wasm/clear-fonts!)
     (->> (p/all [(provision-fonts! opts frame-id)

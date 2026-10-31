@@ -21,6 +21,8 @@ if [ ! -d penpot ]; then
 fi
 git -C penpot fetch -q --depth 1 origin "$penpot_rev"
 git -C penpot checkout -q --force FETCH_HEAD
+git -C penpot clean -qfd
+for patch in "$here"/patches/*.patch; do git -C penpot apply "$patch"; done
 
 # Penpot's build sources emsdk from its devenv path, and exits 0 when cargo
 # fails, so the artifact's presence is the check.
