@@ -199,6 +199,21 @@
        (interpose "\n")
        (apply str)))
 
+(defn- legacy-fill-images
+  "Moves a shape's `:fill-image`, an image fill from before fills were a list,
+  to the top of its fills. The SVG renderer paints it stretched over the fills
+  (ui/shapes/fills.cljs); render-wasm reads only the fills."
+  [objects]
+  (update-vals objects
+               (fn [shape]
+                 (if-let [image (:fill-image shape)]
+                   (-> shape
+                       (dissoc :fill-image)
+                       (update :fills #(into [{:fill-opacity 1
+                                               :fill-image   (assoc image :keep-aspect-ratio false)}]
+                                             %)))
+                   shape))))
+
 (defn- layer-list
   "The board's text and image layers, by path, as `penpotLayers` lists them.
   Hidden shapes and everything under them are left out."
@@ -229,7 +244,7 @@
 (defn layers
   "The text and image layers of the board `frame` on a `get-page` response."
   [page frame]
-  (let [objects (:objects (t/decode-str page))]
+  (let [objects (legacy-fill-images (:objects (t/decode-str page)))]
     (clj->js (layer-list objects (uuid/uuid frame)))))
 
 ;; --- variant values
@@ -516,7 +531,7 @@
     (wasm/render-shape-raster frame-id scale :png)))
 
 (defn- render-variant [opts objects frame-id variant]
-  (let [state (-> {:objects objects :texts #{} :reflow #{} :images {}}
+  (let [state (-> {:objects (legacy-fill-images objects) :texts #{} :reflow #{} :images {}}
                   (apply-variant frame-id variant)
                   (svg-fill-precedence frame-id)
                   (svg-pattern-fills frame-id))]
