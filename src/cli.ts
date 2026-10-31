@@ -9,6 +9,9 @@ import { formats, type Format, type FrameInfo, type Layer } from "./design";
 import { readFigma } from "./figma/read";
 import { frameRuns, pickFrame, pickPage } from "./frames";
 import { plan, readRows, variant } from "./data";
+import { readFont } from "./font";
+import { addFont, teamFonts } from "./penpot/fonts";
+import { penpotToken, rpc } from "./penpot/rpc";
 import { penpotCopyOf, penpotFreeX, penpotRemove } from "./penpot/page";
 import { writePenpot } from "./penpot/write";
 import { chooseFields, drift, type Template } from "./template";
@@ -21,6 +24,8 @@ const usage = `usage:
   templates render <template.json> --data rows.csv|rows.json [--on url] [--format png|jpg|pdf|svg] [--scale N] [--out dir]
   templates check <template.json> [--on url]    report fields whose layer is gone or changed
   templates copy <figma-url> --to <penpot-url> [--frame F]
+  templates fonts <penpot-url> [file.ttf|file.otf]... [--family name]
+                                                list the team's fonts, or add these files to them
 
 <url> is a Figma design URL or a Penpot workspace URL. A Penpot file is read
 over its API when PENPOT_TOKEN or ~/.config/templates/penpot-token holds an
@@ -29,7 +34,9 @@ http://127.0.0.1:9222), as copy always does. F is a frame id or name; a Figma UR
 with node-id names one. --on renders or checks another design, such as the
 Penpot copy, and finds the frame there by name. --list names a repeating row;
 --field list.name=layer picks a layer inside it, and a JSON data cell holds
-the rows.`;
+the rows. fonts needs the token; it reads each file's family, weight and style,
+and --family files them under another family name, such as the one a Figma
+design asks for.`;
 
 const { positionals, values } = parseArgs({
   allowPositionals: true,
@@ -42,12 +49,13 @@ const { positionals, values } = parseArgs({
     data: { type: "string" },
     on: { type: "string" },
     to: { type: "string" },
+    family: { type: "string" },
     format: { type: "string", default: "png" },
     scale: { type: "string", default: "1" },
   },
 });
 
-const [command, subject] = positionals;
+const [command, subject, ...files] = positionals;
 const commands: Record<string, (subject: string) => Promise<void>> = {
   pages,
   layers,
@@ -55,6 +63,7 @@ const commands: Record<string, (subject: string) => Promise<void>> = {
   render,
   check,
   copy,
+  fonts,
 };
 const run = command && subject ? commands[command] : undefined;
 if (!run) {
@@ -165,6 +174,51 @@ async function copy(url: string) {
   );
   for (const warning of [...design.warnings, ...made.warnings])
     console.log(`  warning: ${warning}`);
+}
+
+async function fonts(url: string) {
+  const target = parseUrl(url);
+  if (target.tool !== "penpot") throw new Error("fonts takes a Penpot workspace URL");
+  const token = await penpotToken();
+  if (!token) throw new Error("fonts needs a Penpot token in PENPOT_TOKEN or the token file");
+  const api = rpc(target.origin, token);
+  // Read every file first, so a bad one stops the run before any upload.
+  const uploads = await Promise.all(
+    files.map(async (path) => {
+      const bytes = new Uint8Array(await Bun.file(path).arrayBuffer());
+      try {
+        const read = readFont(bytes);
+        return { path, bytes, font: { ...read, family: values.family ?? read.family } };
+      } catch (error) {
+        throw new Error(`${path}: ${(error as Error).message}`);
+      }
+    }),
+  );
+  const team = await teamFonts(api, target.team);
+  for (const { path, bytes, font } of uploads) {
+    const label = `${font.family} ${font.weight} ${font.style}`;
+    const added = await addFont(api, target.team, bytes, font, team);
+    if (!added) {
+      console.log(`${path}: the team already has ${label}`);
+      continue;
+    }
+    team.push(added);
+    console.log(`${path} → ${label}`);
+    if (font.variable)
+      console.log(
+        `  warning: Penpot draws a variable font at its default instance; add static files for other weights`,
+      );
+  }
+  if (files.length > 0) return;
+  const families = Map.groupBy(team, (f) => f.family);
+  if (families.size === 0) return console.log("the team has no fonts of its own");
+  for (const [family, variants] of families)
+    console.log(
+      `${family}  ${variants
+        .toSorted((a, b) => a.weight - b.weight || b.style.localeCompare(a.style))
+        .map((v) => (v.style === "italic" ? `${v.weight}i` : String(v.weight)))
+        .join(" ")}`,
+    );
 }
 
 async function open(url: string): Promise<Backend & AsyncDisposable> {

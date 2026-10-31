@@ -61,6 +61,14 @@ tool-neutral tree in [src/model.ts](../src/model.ts) plus its images and SVGs.
 The CLI passes it to `writePenpot` in
 [src/penpot/write.ts](../src/penpot/write.ts), which builds the board.
 
+## Fonts
+
+`fonts` reads each file's family, weight and style with `readFont` in
+[src/font.ts](../src/font.ts). `addFont` in
+[src/penpot/fonts.ts](../src/penpot/fonts.ts) uploads it in chunks and adds it
+to the team. Both it and the headless backend call Penpot through `rpc` in
+[src/penpot/rpc.ts](../src/penpot/rpc.ts).
+
 ## Core data
 
 | Type       | File                                  | Holds                                          |

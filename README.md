@@ -69,10 +69,12 @@ This writes `out/lima.png`.
 | `render <template> --data <rows>`                | Renders one file per row.                           |
 | `check <template> [--on url]`                    | Reports fields whose layer is gone or changed kind. |
 | `copy <figma-url> --to <penpot-url>`             | Rebuilds the Figma frame as a board in Penpot.      |
+| `fonts <penpot-url> [file.otf]...`               | Lists the Penpot team's fonts, or adds these files. |
 
 ## Documentation
 
 - [docs/templates.md](docs/templates.md): fields, data rows and render options.
 - [docs/copy.md](docs/copy.md): copying a design from Figma to Penpot.
+- [docs/fonts.md](docs/fonts.md): adding font files to a Penpot team.
 - [docs/engine.md](docs/engine.md): rendering Penpot without a browser.
 - [docs/readme.md](docs/readme.md): the whole manual.
