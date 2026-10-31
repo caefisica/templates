@@ -23,6 +23,7 @@
    [app.common.render-wasm.mem.heap32 :as mem.h32]
    [app.common.render-wasm.serializers :as sr]
    [app.common.render-wasm.svg-derived :as svg-derived]
+   [app.common.render-wasm.text-content :as tc]
    [app.common.render-wasm.wasm :as rw]
    [app.common.transit :as t]
    [app.common.types.fills.impl]
@@ -130,6 +131,38 @@
                                     :emoji? (boolean is-emoji) :fallback? (boolean is-fallback)}
                                    buf)))
              (fetch-cached fetch url)))))
+
+(defn- ttf-metrics
+  "The ascent and descent of a TTF or OTF in `buf` per unit of font size, as
+  FreeType reads them: the typo metrics when OS/2 sets USE_TYPO_METRICS or
+  hhea holds none, else hhea's. Nil for any other format."
+  [buf]
+  (let [view   (js/DataView. buf)
+        u16    #(.getUint16 view %)
+        i16    #(.getInt16 view %)
+        tag    #(apply str (map (fn [i] (js/String.fromCharCode (.getUint8 view (+ % i)))) (range 4)))
+        tables (when (contains? #{"\u0000\u0001\u0000\u0000" "true" "OTTO"} (tag 0))
+                 (into {} (for [i (range (u16 4)) :let [o (+ 12 (* 16 i))]]
+                            [(tag o) (.getUint32 view (+ o 8))])))
+        {head "head" hhea "hhea" os2 "OS/2"} tables]
+    (when (and head hhea)
+      (let [upm   (u16 (+ head 18))
+            typo? (and os2 (or (bit-test (u16 (+ os2 62)) 7)
+                               (and (zero? (i16 (+ hhea 4))) (zero? (i16 (+ hhea 6))))))
+            [a d] (if typo?
+                    [(i16 (+ os2 68)) (i16 (+ os2 70))]
+                    [(i16 (+ hhea 4)) (i16 (+ hhea 6))])]
+        {:ascent (/ a upm) :descent (/ (- d) upm)}))))
+
+(defn- leaf-family
+  "The family render-wasm loads for `leaf` in `paragraph`."
+  [paragraph leaf]
+  {:id     (uuid/get-u32 (cfnt/font-id->uuid (:font-id leaf "sourcesanspro")))
+   :weight (tc/serialize-font-weight (get leaf :font-weight (tc/serialize-font-weight (:font-weight paragraph))))
+   :style  (if (= "italic" (:font-style leaf)) 1 0)})
+
+(defn- family-key [{:keys [id weight style]}]
+  [(vec id) weight style])
 
 ;; --- images
 
@@ -342,71 +375,249 @@
 
 (defn- line-breaks
   "The offsets in a paragraph's `text` where its position-data `runs` open a
-  new line, and the runs after the paragraph's; nil when the runs do not
-  spell the text. An empty paragraph has one blank run."
+  new line, the [y height] of each line, and the runs after the paragraph's;
+  nil when the runs do not spell the text. A run's y is the bottom of its
+  content area, which runs on one line share, and a line's height is its
+  tallest run's. An empty paragraph has one blank run."
   [text runs]
   (if (empty? text)
-    [[] (rest runs)]
-    (loop [offset 0 prev-y nil runs runs breaks []]
+    (when-let [{:keys [y height]} (first runs)] [[] [[y height]] (rest runs)])
+    (loop [offset 0 lines [] runs runs breaks []]
       (if (= offset (count text))
-        [breaks runs]
-        (let [{run :text y :y} (first runs)
-              end (+ offset (count run))]
+        [breaks lines runs]
+        (let [{run :text :keys [y height]} (first runs)
+              end       (+ offset (count run))
+              new-line? (or (empty? lines) (> (abs (- y (first (peek lines)))) 0.5))]
           (when (and (seq run) (<= end (count text))
                      (= (.toLowerCase (subs text offset end)) (.toLowerCase run)))
-            (recur end y (rest runs)
-                   (cond-> breaks (and prev-y (> (abs (- y prev-y)) 0.5)) (conj offset)))))))))
+            (recur end
+                   (if new-line?
+                     (conj lines [y height])
+                     (update-in lines [(dec (count lines)) 1] max height))
+                   (rest runs)
+                   (cond-> breaks (and new-line? (seq lines)) (conj offset)))))))))
 
-(defn- break-leaves
-  "Ends the line at each paragraph offset in `breaks` with a newline, in the
-  leaf that holds the line's last character. When `hold-spaces?`, the spaces
-  before the newline become no-break spaces: the editor counts a line's
-  trailing spaces when it centers or right-aligns it, and Skia counts a
-  no-break space but not a trailing one. A left-aligned line keeps its
-  spaces, since counting them can push a full line over the width."
+(defn- split-lines
+  "Cuts a paragraph's `leaves` at each offset in `breaks` into one vector of
+  leaves per line, and ends every line but the last with a newline. When
+  `hold-spaces?`, the spaces before the newline become no-break spaces: the
+  editor counts a line's trailing spaces when it centers or right-aligns it,
+  and Skia counts a no-break space but not a trailing one. A left-aligned
+  line keeps its spaces, since counting them can push a full line over the
+  width."
   [leaves breaks hold-spaces?]
-  (let [hold #(.replace % #" +$" (fn [spaces] (.repeat (js/String.fromCharCode 0xa0) (count spaces))))]
-    (mapv (fn [leaf start]
-            (let [text  (:text leaf "")
-                  cuts  (keep #(when (< start % (+ start (count text) 1)) (- % start)) breaks)
-                  lines (map #(subs text %1 %2) (cons 0 cuts) (concat cuts [(count text)]))
-                  lines (if hold-spaces? (concat (map hold (butlast lines)) [(last lines)]) lines)]
-              (cond-> leaf
-                (seq cuts) (assoc :text (.join (clj->js lines) "\n")))))
-          leaves (reductions + 0 (map #(count (:text % "")) leaves)))))
+  (let [hold   #(.replace % #" +$" (fn [spaces] (.repeat (js/String.fromCharCode 0xa0) (count spaces))))
+        cut?   (set breaks)
+        pieces (mapcat (fn [leaf start]
+                         (let [text (:text leaf "")
+                               end  (+ start (count text))]
+                           (if (empty? text)
+                             [[leaf false]]
+                             (keep (fn [[from to]]
+                                     (when (< from to)
+                                       [(assoc leaf :text (cond-> (subs text (- from start) (- to start))
+                                                            (and hold-spaces? (cut? to)) hold
+                                                            (cut? to) (str "\n")))
+                                        (cut? to)]))
+                                   (partition 2 1 (concat [start] (filter #(< start % (inc end)) breaks) [end]))))))
+                       leaves (reductions + 0 (map #(count (:text % "")) leaves)))]
+    (reduce (fn [lines [piece line-end?]]
+              (cond-> (update lines (dec (count lines)) conj piece) line-end? (conj [])))
+            [[]] pieces)))
+
+(defn- leaf-font-size
+  "The font size render-wasm gives `leaf`, which falls back to its paragraph's."
+  [paragraph leaf]
+  (js/parseFloat (or (:font-size leaf) (:font-size paragraph) "14")))
+
+(defn- leaf-pitch
+  "The height Skia gives a line of `leaf` in `paragraph`, before rounding."
+  [paragraph leaf]
+  (* (leaf-font-size paragraph leaf)
+     (js/parseFloat (or (:line-height leaf) (:line-height paragraph) "1.2"))))
+
+(defn- line-pitches
+  "The stored pitch of each of `lines` of [pitch top]: the step to the next
+  line's top. The last line, which has no next top, takes the stored pitch of
+  the last line with its own unrounded pitch, or that pitch."
+  [lines]
+  (let [tops  (mapv second lines)
+        last' (let [[pitch top] (peek lines)]
+                (+ top (or (some (fn [[[p] step]] (when (= p pitch) step))
+                                 (reverse (map vector lines (map - (rest tops) tops))))
+                           pitch)))
+        tops  (conj tops last')]
+    (map - (rest tops) tops)))
+
+(defn- line-heights
+  "Whole-pixel heights for lines of `pitches` that keep each line's top within
+  half a pixel of its stored top. Skia rounds every line's height on its own,
+  so a 22.4 px pitch steps 22 px and the error grows down the text."
+  [pitches]
+  (let [tops (map js/Math.round (reductions + 0 pitches))]
+    (map - (rest tops) tops)))
+
+(defn- snapped-heights
+  "Whole-pixel heights, each the floor or ceiling of its line's `:pitch`,
+  that put the most of `lines` on the pixel row of their stored `:target`,
+  then nearest it. Both renderers draw a line on the whole pixel nearest its
+  baseline, so a line whose baselines differ by a fraction still lands on the
+  same row when both round alike. Skia centers a line's content in its height
+  and puts the target `:offset` below that center, and render-wasm offsets
+  the lines by the vertical align of the box height less theirs. A line with
+  no target draws nothing and only spaces the others. Targets and the result
+  are measured from the box top, which sits `shift` below the board's."
+  [lines box-height valign shift scale]
+  (let [row     #(js/Math.round (* (+ % shift) scale))
+        options (map (fn [{:keys [pitch]}]
+                       (distinct [(max 1 (js/Math.floor pitch)) (max 1 (js/Math.ceil pitch))]))
+                     lines)
+        miss    (fn [top n {:keys [target offset]}]
+                  (if target
+                    (let [s (+ top (/ n 2) offset)]
+                      (+ (abs (- (row s) (row target))) (* 0.001 (abs (- s target)))))
+                    0))
+        fit     (fn [total]
+                  (let [start (case valign "bottom" (- box-height total) "center" (/ (- box-height total) 2) 0)
+                        step  (fn [states [line ns]]
+                                (reduce-kv
+                                 (fn [out top [cost heights]]
+                                   (reduce (fn [out n]
+                                             (let [cost (+ cost (miss (+ start top) n line))]
+                                               (if (some-> (get out (+ top n)) first (<= cost))
+                                                 out
+                                                 (assoc out (+ top n) [cost (conj heights n)]))))
+                                           out ns))
+                                 {} states))]
+                    (get (reduce step {0 [0 []]} (map vector lines options)) total)))]
+    (->> (range (apply + (map first options)) (inc (apply + (map last options))))
+         (keep fit)
+         (apply min-key first)
+         second)))
+
+(defn- line-target
+  "Where the exporter draws the line, as {:target :offset} for
+  `snapped-heights`; nil for a blank line. It draws each run as SVG text at
+  the run's y on the ideographic baseline, which Chrome puts the font's
+  descent, rounded at the render `scale`, above the baseline. The line's
+  largest leaf sets it. Without that font's metrics the target is the run's
+  center, which Skia's content center meets."
+  [metrics scale paragraph line [y height]]
+  (let [measure (fn [leaf]
+                  (when-let [{:keys [ascent descent]} (get metrics (family-key (leaf-family paragraph leaf)))]
+                    (let [size (leaf-font-size paragraph leaf)]
+                      [size (* size ascent) (* size descent)])))
+        fonts   (map measure line)]
+    (cond
+      (re-matches #"\s*" (apply str (map #(:text % "") line))) nil
+      (every? some? fonts)
+      (let [[_ _ d] (apply max-key first fonts)]
+        {:target (- y (/ (js/Math.round (* d scale)) scale))
+         :offset (apply max (map (fn [[_ a d]] (/ (- a d) 2)) fonts))})
+      :else {:target (- y (/ height 2)) :offset 0})))
+
+(defn- stored-pitch
+  "Gives each line of `paragraphs` the whole-pixel height its stored runs
+  set. `paragraphs` holds [paragraph lines marks] in text order, with one
+  leaf vector in `lines` per [y height] in `marks`. A line's content area sits
+  centered in its pitch, so its top is y less the mean of its height and
+  pitch. Each leaf's line height carries the line's height, and a
+  paragraph's line height drops to its smallest leaf's, since render-wasm
+  lays out each span at the larger of the two. An unrotated text puts each
+  line on its stored baseline's pixel row; a rotated one keeps the pitch."
+  [{:keys [metrics board-y scale]} {:keys [selrect content] :as shape} paragraphs]
+  (let [pitch   (fn [paragraph line] (apply max (map #(leaf-pitch paragraph %) line)))
+        marks   (for [[paragraph lines marks] paragraphs
+                      [line [y height :as mark]] (map vector lines marks)]
+                  [(pitch paragraph line) y height (line-target metrics scale paragraph line mark)])
+        pitches (line-pitches (mapv (fn [[p y height]] [p (- y (/ (+ height p) 2))]) marks))
+        heights (if (gmt/unit? (:transform shape (gmt/matrix)))
+                  (snapped-heights (map (fn [[_ _ _ target] pitch]
+                                          (-> target (d/update-when :target - (:y selrect)) (assoc :pitch pitch)))
+                                        marks pitches)
+                                   (:height selrect) (:vertical-align content)
+                                   (- (:y selrect) board-y) scale)
+                  (line-heights pitches))]
+    (first
+     (reduce (fn [[out heights] [paragraph lines]]
+               (let [lines' (map (fn [line height]
+                                   (mapv #(assoc % :line-height (/ height (leaf-font-size paragraph %)))
+                                         line))
+                                 lines heights)
+                     leaves (vec (apply concat lines'))]
+                 [(conj out (assoc paragraph
+                                   :children leaves
+                                   :line-height (apply min (map :line-height leaves))))
+                  (drop (count lines) heights)]))
+             [[] heights] paragraphs))))
 
 (defn- stored-line-breaks
-  "Breaks each paragraph of a text where its position data does. The exporter
-  draws those runs as the editor wrapped them, and Skia's wrap at the same
-  width can move a word. A justified paragraph keeps Skia's wrap, which
-  justifies only soft-wrapped lines; so does a text whose runs do not spell
-  its content."
-  [{:keys [content position-data] :as shape}]
-  (let [paths   (for [[si paragraphs] (map-indexed vector (:children content))
-                      pi             (range (count (:children paragraphs)))]
-                  [:children si :children pi])
-        step    (fn [[content runs] path]
-                  (let [paragraph (get-in content path)
-                        text      (apply str (map #(:text % "") (:children paragraph)))]
-                    (if-let [[breaks runs] (line-breaks text runs)]
-                      [(cond-> content
-                         (and (seq breaks) (not= "justify" (:text-align paragraph)))
-                         (update-in (conj path :children) break-leaves breaks
-                                    (contains? #{"center" "right"} (:text-align paragraph))))
-                       runs]
-                      (reduced nil))))
-        [content' runs] (reduce step [content (seq position-data)] paths)]
-    (if (and content' (empty? runs)) (assoc shape :content content') shape)))
+  "Lays a text out as its position data does. The exporter draws those runs
+  as the editor laid them out: Skia's wrap at the same width can move a word,
+  and the editor's line pitch is fractional and need not be the font size
+  times the line height. Each paragraph breaks where its runs do, and each
+  line takes the height between its run and the next. A justified paragraph
+  keeps Skia's wrap, which justifies only soft-wrapped lines, and the text
+  keeps its line heights; a text whose runs do not spell its content stays
+  as it is."
+  [ctx {:keys [content position-data] :as shape}]
+  (let [paths (for [[si paragraphs] (map-indexed vector (:children content))
+                    pi             (range (count (:children paragraphs)))]
+                [:children si :children pi])
+        step  (fn [[out runs] path]
+                (let [paragraph (get-in content path)
+                      leaves    (:children paragraph)
+                      text      (apply str (map #(:text % "") leaves))]
+                  (if-let [[breaks marks runs] (line-breaks text runs)]
+                    [(conj out [path paragraph
+                                (if (= "justify" (:text-align paragraph))
+                                  [leaves]
+                                  (split-lines leaves breaks (contains? #{"center" "right"} (:text-align paragraph))))
+                                marks])
+                     runs]
+                    (reduced nil))))
+        [paragraphs runs] (reduce step [[] (seq position-data)] paths)
+        pitched? (every? (fn [[_ _ lines marks]] (= (count lines) (count marks))) paragraphs)
+        updated  (if pitched?
+                   (stored-pitch ctx shape (map rest paragraphs))
+                   (map (fn [[_ paragraph lines]] (assoc paragraph :children (vec (apply concat lines))))
+                        paragraphs))]
+    (if (and paragraphs (empty? runs))
+      (assoc shape :content (reduce (fn [content [[path] paragraph]] (assoc-in content path paragraph))
+                                    content (map vector paragraphs updated)))
+      shape)))
 
 (defn- stored-wraps
-  "Gives the board's texts that no value changed their stored line breaks."
-  [state root-id]
+  "Gives the board's texts that no value changed their stored line breaks.
+  `ctx` holds the `font-metrics`, the board's top and the render scale."
+  [state root-id ctx]
   (reduce (fn [state id]
             (cond-> state
               (and (= :text (get-in state [:objects id :type]))
                    (not (contains? (:texts state) id)))
-              (update-in [:objects id] stored-line-breaks)))
+              (update-in [:objects id] #(stored-line-breaks ctx %))))
           state (subtree (:objects state) root-id)))
+
+(defn- font-metrics
+  "Promise of a map from each family the board's texts use to its
+  `ttf-metrics`. It fetches through the cache that `provision-fonts!` reads."
+  [{:keys [fetch] :as opts} objects root-id]
+  (let [families (into []
+                       (d/distinct-xf family-key)
+                       (for [id        (subtree objects root-id)
+                             :let      [{:keys [type content]} (get objects id)]
+                             :when     (= :text type)
+                             paragraph (tree-seq :children :children content)
+                             :when     (= "paragraph" (:type paragraph))
+                             leaf      (:children paragraph)]
+                         (leaf-family paragraph leaf)))]
+    (->> families
+         (map (fn [family]
+                (if-let [url (font-url opts family)]
+                  (p/fmap #(when % [(family-key family) (ttf-metrics %)]) (fetch-cached fetch url))
+                  (p/resolved nil))))
+         (p/all)
+         (p/fmap #(into {} (filter second) %)))))
 
 (defn- repair-text [content]
   (update content :children
@@ -600,22 +811,28 @@
 
 (defn- render-variant [opts objects frame-id variant]
   (let [state (-> {:objects (legacy-fill-images objects) :texts #{} :reflow #{} :images {}}
-                  (apply-variant frame-id variant)
-                  (stored-wraps frame-id)
-                  (svg-fill-precedence frame-id)
-                  (svg-pattern-fills frame-id))]
-    (serialize! (:objects state))
-    (wasm/clear-fonts!)
-    (->> (p/all [(provision-fonts! opts frame-id)
-                 (provision-fallback-fonts! opts (:objects state))
-                 (provision-images! opts (:objects state) (:images state))])
-         (p/fmap (fn [_]
-                   (layout-texts! (:objects state))
-                   (let [moved (lay-out state)]
-                     (when-not (identical? moved (:objects state))
-                       (serialize! moved)
-                       (layout-texts! moved))
-                     (render-bytes frame-id (:format opts) (:scale opts))))))))
+                  (apply-variant frame-id variant))]
+    (->> (font-metrics opts (:objects state) frame-id)
+         (p/mcat (fn [metrics]
+                   (let [ctx   {:metrics metrics
+                                :board-y (get-in objects [frame-id :selrect :y] 0)
+                                :scale   (:scale opts)}
+                         state (-> state
+                                   (stored-wraps frame-id ctx)
+                                   (svg-fill-precedence frame-id)
+                                   (svg-pattern-fills frame-id))]
+                     (serialize! (:objects state))
+                     (wasm/clear-fonts!)
+                     (->> (p/all [(provision-fonts! opts frame-id)
+                                  (provision-fallback-fonts! opts (:objects state))
+                                  (provision-images! opts (:objects state) (:images state))])
+                          (p/fmap (fn [_]
+                                    (layout-texts! (:objects state))
+                                    (let [moved (lay-out state)]
+                                      (when-not (identical? moved (:objects state))
+                                        (serialize! moved)
+                                        (layout-texts! moved))
+                                      (render-bytes frame-id (:format opts) (:scale opts))))))))))))
 
 (defonce ^:private module* (atom nil))
 
