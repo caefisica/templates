@@ -465,16 +465,17 @@
   same row when both round alike. Skia centers a line's content in its height
   and puts the target `:offset` below that center, and render-wasm offsets
   the lines by the vertical align of the box height less theirs. A line with
-  no target draws nothing and only spaces the others. Targets and the result
-  are measured from the box top, which sits `shift` below the board's."
+  no target draws nothing and only spaces the others. Targets are measured
+  from the board top, and heights from the box top, which sits `shift` below
+  it."
   [lines box-height valign shift scale]
-  (let [row     #(js/Math.round (* (+ % shift) scale))
+  (let [row     #(js/Math.round (* % scale))
         options (map (fn [{:keys [pitch]}]
                        (distinct [(max 1 (js/Math.floor pitch)) (max 1 (js/Math.ceil pitch))]))
                      lines)
         miss    (fn [top n {:keys [target offset]}]
                   (if target
-                    (let [s (+ top (/ n 2) offset)]
+                    (let [s (+ shift top (/ n 2) offset)]
                       (+ (abs (- (row s) (row target))) (* 0.001 (abs (- s target)))))
                     0))
         fit     (fn [total]
@@ -496,25 +497,28 @@
          second)))
 
 (defn- line-target
-  "Where the exporter draws the line, as {:target :offset} for
+  "Where the exporter draws the line on the board, as {:target :offset} for
   `snapped-heights`; nil for a blank line. It draws each run as SVG text at
   the run's y on the ideographic baseline, which Chrome puts the font's
-  descent, rounded at the render `scale`, above the baseline. The line's
-  largest leaf sets it. Without that font's metrics the target is the run's
-  center, which Skia's content center meets."
-  [metrics scale paragraph line [y height]]
+  descent, rounded at the render `scale`, above the baseline. Chrome works
+  in single floats, so a y a double's error short of a half pixel is the
+  half pixel there and rounds up. The line's largest leaf sets it. Without
+  that font's metrics the target is the run's center, which Skia's content
+  center meets."
+  [{:keys [metrics board-y scale]} paragraph line [y height]]
   (let [measure (fn [leaf]
                   (when-let [{:keys [ascent descent]} (get metrics (family-key (leaf-family paragraph leaf)))]
                     (let [size (leaf-font-size paragraph leaf)]
                       [size (* size ascent) (* size descent)])))
-        fonts   (map measure line)]
+        fonts   (map measure line)
+        f32     js/Math.fround]
     (cond
       (re-matches #"\s*" (apply str (map #(:text % "") line))) nil
       (every? some? fonts)
       (let [[_ _ d] (apply max-key first fonts)]
-        {:target (- y (/ (js/Math.round (* d scale)) scale))
+        {:target (f32 (- (f32 (- (f32 y) (/ (js/Math.round (* d scale)) scale))) (f32 board-y)))
          :offset (apply max (map (fn [[_ a d]] (/ (- a d) 2)) fonts))})
-      :else {:target (- y (/ height 2)) :offset 0})))
+      :else {:target (- y (/ height 2) board-y) :offset 0})))
 
 (defn- stored-pitch
   "Gives each line of `paragraphs` the whole-pixel height its stored runs
@@ -525,15 +529,15 @@
   paragraph's line height drops to its smallest leaf's, since render-wasm
   lays out each span at the larger of the two. An unrotated text puts each
   line on its stored baseline's pixel row; a rotated one keeps the pitch."
-  [{:keys [metrics board-y scale]} {:keys [selrect content] :as shape} paragraphs]
+  [{:keys [board-y scale] :as ctx} {:keys [selrect content] :as shape} paragraphs]
   (let [pitch   (fn [paragraph line] (apply max (map #(leaf-pitch paragraph %) line)))
         marks   (for [[paragraph lines marks] paragraphs
                       [line [y height :as mark]] (map vector lines marks)]
-                  [(pitch paragraph line) y height (line-target metrics scale paragraph line mark)])
+                  [(pitch paragraph line) y height (line-target ctx paragraph line mark)])
         pitches (line-pitches (mapv (fn [[p y height]] [p (- y (/ (+ height p) 2))]) marks))
         heights (if (gmt/unit? (:transform shape (gmt/matrix)))
                   (snapped-heights (map (fn [[_ _ _ target] pitch]
-                                          (-> target (d/update-when :target - (:y selrect)) (assoc :pitch pitch)))
+                                          (assoc target :pitch pitch))
                                         marks pitches)
                                    (:height selrect) (:vertical-align content)
                                    (- (:y selrect) board-y) scale)
