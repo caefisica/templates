@@ -6,19 +6,30 @@ import type { Format, Layer, PageInfo, Variant } from "../design";
 
 declare const figma: any;
 
+// A section only groups frames on the canvas, so the frames in it count as
+// top-level frames.
 export async function figmaPages(): Promise<PageInfo[]> {
   await figma.loadAllPagesAsync();
+  const frames = (nodes: any[], section?: string): any[] =>
+    nodes.flatMap((n: any) =>
+      n.type === "SECTION"
+        ? frames(n.children, section ? `${section}/${n.name}` : n.name)
+        : ["FRAME", "COMPONENT", "INSTANCE"].includes(n.type)
+          ? [
+              {
+                id: n.id,
+                name: n.name,
+                w: Math.round(n.width),
+                h: Math.round(n.height),
+                ...(section ? { section } : {}),
+              },
+            ]
+          : [],
+    );
   return figma.root.children.map((page: any) => ({
     id: page.id,
     name: page.name,
-    frames: page.children
-      .filter((n: any) => ["FRAME", "COMPONENT", "INSTANCE"].includes(n.type))
-      .map((n: any) => ({
-        id: n.id,
-        name: n.name,
-        w: Math.round(n.width),
-        h: Math.round(n.height),
-      })),
+    frames: frames(page.children),
   }));
 }
 

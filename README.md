@@ -58,7 +58,7 @@ This writes `out/lima.png`.
 
 | Command                                          | Does                                                |
 | ------------------------------------------------ | --------------------------------------------------- |
-| `pages <url>`                                    | Lists pages and their top-level frames.             |
+| `pages <url> [--page P]`                         | Lists pages and their top-level frames.             |
 | `layers <url> [--frame F]`                       | Lists the frame's visible text and image layers.    |
 | `init <url> [--frame F] [--field name=layer]...` | Writes `template.json`.                             |
 | `render <template> --data <rows>`                | Renders one file per row.                           |

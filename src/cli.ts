@@ -7,6 +7,7 @@ import { parseArgs } from "node:util";
 import { type Backend, connect } from "./backend";
 import { formats, type Format, type FrameInfo, type Layer } from "./design";
 import { readFigma } from "./figma/read";
+import { frameRuns, pickPage } from "./frames";
 import { plan, readRows, variant } from "./data";
 import { penpotCopyOf, penpotFreeX, penpotRemove } from "./penpot/page";
 import { writePenpot } from "./penpot/write";
@@ -14,7 +15,7 @@ import { chooseFields, drift, type Template } from "./template";
 import { parseUrl } from "./url";
 
 const usage = `usage:
-  templates pages <url>                         list pages and their frames
+  templates pages <url> [--page P]              list pages and their frames
   templates layers <url> [--frame F]            list the frame's text and image layers
   templates init <url> [--frame F] [--field name=layer]... [--out template.json]
   templates render <template.json> --data rows.csv [--on url] [--format png|jpg|pdf|svg] [--scale N] [--out dir]
@@ -30,6 +31,7 @@ const { positionals, values } = parseArgs({
   allowPositionals: true,
   options: {
     frame: { type: "string" },
+    page: { type: "string" },
     field: { type: "string", multiple: true, default: [] },
     out: { type: "string" },
     data: { type: "string" },
@@ -61,9 +63,14 @@ await run(subject!).catch((error: Error) => {
 
 async function pages(url: string) {
   await using backend = await open(url);
-  for (const page of await backend.pages()) {
+  const all = await backend.pages();
+  for (const page of values.page ? [pickPage(all, values.page)] : all) {
     console.log(`${page.name}  (${page.id})`);
-    for (const f of page.frames) console.log(`  ${f.id.padEnd(12)}  ${f.name}  ${f.w}×${f.h}`);
+    for (const { first: f, count } of frameRuns(page.frames))
+      console.log(
+        `  ${f.id.padEnd(12)}  ${f.section ? `${f.section} / ` : ""}${f.name}  ${f.w}×${f.h}` +
+          (count > 1 ? `  ×${count}` : ""),
+      );
   }
 }
 

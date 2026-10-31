@@ -1,6 +1,7 @@
 // The shapes both page backends return, so the CLI treats Figma and Penpot alike.
 
-export type FrameInfo = { id: string; name: string; w: number; h: number };
+// `section` names the Figma sections that hold the frame, outermost first.
+export type FrameInfo = { id: string; name: string; w: number; h: number; section?: string };
 
 export type PageInfo = { id: string; name: string; frames: FrameInfo[] };
 
