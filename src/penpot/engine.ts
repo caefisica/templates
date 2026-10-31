@@ -7,12 +7,12 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import type { Layer } from "../design";
 
-const release = "engine-723267c-3";
+const release = "engine-723267c-4";
 
 const sha256: Record<string, string> = {
   "engine.js": "c712bc3cb3539d3013aea27c7dab135cd8245eb28592caa3ccb5ff1963f7a293",
   "render-wasm.js": "d36f8fb63eee2799e2e95e813c925c5b823db16071ba5c02240ec85a54fd46eb",
-  "render-wasm.wasm": "47cefda5680e4a83bf3cc274bb4c539d5b1677366694ef7fff3ccb614512c6f0",
+  "render-wasm.wasm": "46d8008172589db4428648fafbeb5b92f3e716fe14a47acf5bfb376c190b361b",
 };
 
 export type RenderOptions = {

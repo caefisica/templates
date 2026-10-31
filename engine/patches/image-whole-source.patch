@@ -1,0 +1,17 @@
+diff --git a/render-wasm/src/render/vector.rs b/render-wasm/src/render/vector.rs
+--- a/render-wasm/src/render/vector.rs
++++ b/render-wasm/src/render/vector.rs
+@@ -1234,9 +1234,12 @@ fn draw_image_fill(
+         paint.set_image_filter(filter.clone());
+     }
+
++    // Skia samples a strict subset without mip levels, so a downscaled photo
++    // aliases. The source is a crop of one image, and Chromium samples across
++    // the crop edge too.
+     canvas.draw_image_rect_with_sampling_options(
+         &image,
+-        Some((&src_rect, skia::canvas::SrcRectConstraint::Strict)),
++        Some((&src_rect, skia::canvas::SrcRectConstraint::Fast)),
+         dest_rect,
+         shared.sampling_options,
+         &paint,
