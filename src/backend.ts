@@ -1,21 +1,22 @@
-// Connects to the browser tab that shows a design and offers the same calls
-// for Figma and Penpot. The browser is the user's own, logged in to both, and
-// reached over CDP; see src/cdp.ts.
+// The calls the CLI makes on a design, the same for Figma and Penpot. A Penpot
+// file is read over its API when a token is set (see src/penpot/headless.ts).
+// Otherwise, and always for Figma, the calls run in the user's own browser
+// tab, logged in and reached over CDP (see src/cdp.ts).
 
 import { listTabs, openTab, Session } from "./cdp";
 import type { Format, FrameInfo, Layer, PageInfo, Variant } from "./design";
 import { figmaFrame, figmaLayers, figmaPages, figmaRender } from "./figma/page";
+import { headless, penpotToken } from "./penpot/headless";
 import { penpotFrame, penpotLayers, penpotOpen, penpotPages, penpotRender } from "./penpot/page";
 import { tabMatch, type Target } from "./url";
 
 export type Backend = {
   target: Target;
-  session: Session;
   pages(): Promise<PageInfo[]>;
   // A frame by id at any depth; see figmaFrame and penpotFrame for reach.
   frame(id: string): Promise<FrameInfo | null>;
   layers(frame: string): Promise<Layer[]>;
-  // Yields each variant's export in order, as its batch finishes.
+  // Yields each variant's export in order.
   render(
     frame: string,
     variants: Variant[],
@@ -25,11 +26,18 @@ export type Backend = {
   close(): void;
 };
 
+export type TabBackend = Backend & { session: Session };
+
+export async function connect(target: Target): Promise<Backend> {
+  const token = target.tool === "penpot" ? await penpotToken() : null;
+  return target.tool === "penpot" && token ? headless(target, token) : connectTab(target);
+}
+
 // Variants per page call. Penpot exports a batch in parallel on its server;
 // the cap also bounds the size of one CDP reply.
 const batch = 4;
 
-export async function connect(target: Target): Promise<Backend> {
+export async function connectTab(target: Target): Promise<TabBackend> {
   const tab =
     (await listTabs()).find((t) => t.url.includes(tabMatch(target))) ?? (await openTab(target.url));
   const session = await Session.open(tab);

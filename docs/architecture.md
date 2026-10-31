@@ -1,10 +1,12 @@
 # Architecture
 
-The CLI runs in Bun. The work on a design runs inside a browser tab: each
-backend function is sent to the page as source text over the Chrome DevTools
-Protocol and calls the plugin API there. `figma` is the Figma editor's API, and
-`globalThis.ɵcontext` is the Penpot workspace's. Data crosses the boundary as
-JSON, with bytes as base64.
+The CLI runs in Bun and has two backends. The tab backend works inside a browser
+tab: each backend function is sent to the page as source text over the Chrome
+DevTools Protocol and calls the plugin API there. `figma` is the Figma editor's
+API, and `globalThis.ɵcontext` is the Penpot workspace's. Data crosses the
+boundary as JSON, with bytes as base64. The headless backend reads a Penpot file
+over Penpot's RPC API and renders it in-process with the engine built from
+[engine/](../engine).
 
 ## One render
 
@@ -29,8 +31,27 @@ JSON, with bytes as base64.
 7. The CLI writes each export to `--out` as its batch arrives.
 
 `pages`, `layers` and `check` take steps 3 to 5 and call `pages` or `layers` on
-the backend. [src/template.ts](../src/template.ts) turns layers into fields for
-`init` and compares them for `check`.
+the backend.
+
+## One headless render
+
+When `penpotToken` finds a token, `connect` in step 4 returns the backend in
+[src/penpot/headless.ts](../src/penpot/headless.ts) instead, and no tab opens:
+
+1. `pages` and `frame` read the file's shapes from `get-file`.
+2. `render` fetches the frame's top-level board from `get-page` as transit, and
+   the team's fonts from `get-font-variants`.
+3. [src/penpot/engine.ts](../src/penpot/engine.ts) loads `engine.js` and the
+   renderer from the cache, downloading them on first use.
+4. `render` in
+   [engine/src/templates/engine.cljs](../engine/src/templates/engine.cljs)
+   applies each variant to the shapes in memory, loads their fonts and images
+   through the backend's `fetch`, lays out the text and flex layouts in the
+   renderer, and returns the export's bytes.
+
+`layers` takes steps 1 to 3 and calls the engine's `layers`.
+[src/template.ts](../src/template.ts) turns layers into fields for `init` and
+compares them for `check`.
 
 ## Copy
 

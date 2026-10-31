@@ -1,0 +1,17 @@
+;; Replaces penpot/exporter/shadow-cljs.edn for the engine build; see build.sh.
+;; npm dependencies are bundled, so engine.js imports only node:fs and node:path.
+{:deps {:aliases [:dev]}
+ :source-paths ["src" "vendor" "../common"]
+
+ :builds
+ {:engine
+  {:target :esm
+   :runtime :node
+   :output-dir "target/engine/"
+   :modules {:engine {:exports {render templates.engine/render layers templates.engine/layers}}}
+   :js-options {:entry-keys ["module" "browser" "main"]
+                :export-conditions ["module" "import", "browser" "require" "default"]
+                :js-provider :shadow
+                :keep-as-import #{"node:fs" "node:path"}}
+   :compiler-options {:output-feature-set :es2020 :output-wrapper false}
+   :release {:compiler-options {:optimizations :simple}}}}}
