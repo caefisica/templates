@@ -82,8 +82,9 @@ export class Session {
     if (result.exceptionDetails) {
       // A thrown string or other non-Error has a value and no description.
       const { exception, text } = result.exceptionDetails;
-      const detail = exception?.description ?? exception?.value ?? text;
-      throw new Error(`page threw: ${detail}`);
+      // An Error's description is "Error: message" and its stack.
+      const detail = exception?.description?.split("\n    at ")[0] ?? exception?.value ?? text;
+      throw new Error(`page threw: ${String(detail).replace(/^Error: /, "")}`);
     }
     return result.result.value as T;
   }

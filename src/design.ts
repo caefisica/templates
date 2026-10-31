@@ -9,9 +9,13 @@ export type PageInfo = { id: string; name: string; frames: FrameInfo[] };
 // joined by "/". One path can match several layers; a field sets them all.
 export type Layer = { path: string; kind: "text" | "image"; value: string; count: number };
 
+// A list replaces a row and its siblings of the same type with one copy of the
+// row per item, each filled from the item's values, keyed by path below the row.
 export type Value =
   | { kind: "text"; text: string }
-  | { kind: "image"; mime: string; base64: string };
+  | { kind: "image"; mime: string; base64: string }
+  | { kind: "hidden" }
+  | { kind: "list"; items: Variant[] };
 
 // Values keyed by layer path.
 export type Variant = Record<string, Value>;

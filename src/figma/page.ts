@@ -94,6 +94,49 @@ export async function figmaRender(args: {
     for (const child of root.children) visit(child, child.name);
     return found;
   };
+  const apply = async (root: any, variant: Variant) => {
+    const layers = byPath(root);
+    for (const [path, value] of Object.entries(variant)) {
+      const nodes = layers.get(path);
+      if (!nodes) throw new Error(`no layer ${path} in ${frame.name}`);
+      if (value.kind === "list") {
+        await fill(nodes[0], value.items);
+        continue;
+      }
+      for (const n of nodes) {
+        if (value.kind === "hidden") n.visible = false;
+        else if (value.kind === "text") {
+          const fonts = n.characters.length
+            ? n.getRangeAllFontNames(0, n.characters.length)
+            : [n.fontName];
+          for (const font of fonts)
+            await figma.loadFontAsync(font).catch(() => {
+              throw new Error(
+                `${path}: font "${font.family} ${font.style}" is not installed where Figma runs, and Figma edits a text only in a font it can load`,
+              );
+            });
+          n.characters = value.text;
+        } else {
+          const image = figma.createImage(bytes(value.base64));
+          n.fills = n.fills.map((f: any) =>
+            f.type === "IMAGE" ? { ...f, imageHash: image.hash } : f,
+          );
+        }
+      }
+    }
+  };
+  // The row's siblings of its type are the design's other example rows.
+  const fill = async (row: any, items: Variant[]) => {
+    const parent = row.parent;
+    for (const sibling of [...parent.children])
+      if (sibling !== row && sibling.type === row.type) sibling.remove();
+    for (const item of items) {
+      const copy = row.clone();
+      parent.insertChild(parent.children.indexOf(row), copy);
+      await apply(copy, item);
+    }
+    row.remove();
+  };
   const settings =
     args.format === "svg"
       ? { format: "SVG" }
@@ -115,25 +158,7 @@ export async function figmaRender(args: {
     copy.x = box.x + box.width + 400;
     copy.y = box.y;
     try {
-      const layers = byPath(copy);
-      for (const [path, value] of Object.entries(variant)) {
-        const nodes = layers.get(path);
-        if (!nodes) throw new Error(`no layer ${path} in ${frame.name}`);
-        for (const n of nodes) {
-          if (value.kind === "text") {
-            const fonts = n.characters.length
-              ? n.getRangeAllFontNames(0, n.characters.length)
-              : [n.fontName];
-            await Promise.all(fonts.map((font: any) => figma.loadFontAsync(font)));
-            n.characters = value.text;
-          } else {
-            const image = figma.createImage(bytes(value.base64));
-            n.fills = n.fills.map((f: any) =>
-              f.type === "IMAGE" ? { ...f, imageHash: image.hash } : f,
-            );
-          }
-        }
-      }
+      await apply(copy, variant);
       out.push(base64(await copy.exportAsync(settings)));
     } finally {
       copy.remove();

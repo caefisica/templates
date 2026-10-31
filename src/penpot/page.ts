@@ -22,7 +22,9 @@ export async function penpotPages(): Promise<PageInfo[]> {
 
 // Any board on the open page by id, however deep, or null. Boards on other
 // pages are reachable by `penpotPages` only.
+// getShapeById throws on an id that is not a uuid, such as a Figma node id.
 export async function penpotFrame(args: { id: string }): Promise<FrameInfo | null> {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(args.id)) return null;
   const s = (globalThis as any)["ɵcontext"].currentPage.getShapeById(args.id);
   if (s?.type !== "board") return null;
   return { id: s.id, name: s.name, w: Math.round(s.width), h: Math.round(s.height) };
@@ -111,9 +113,48 @@ export async function penpotRender(args: {
     }
   };
 
+  const texts: any[] = [];
+  const apply = async (root: any, variant: Variant) => {
+    const layers = byPath(root);
+    for (const [path, value] of Object.entries(variant)) {
+      const shapes = layers.get(path);
+      if (!shapes) throw new Error(`no layer ${path} in ${frame.name}`);
+      if (value.kind === "list") {
+        await fill(shapes[0], value.items);
+        continue;
+      }
+      for (const s of shapes) {
+        if (value.kind === "hidden") s.hidden = true;
+        else if (value.kind === "text") {
+          s.characters = value.text;
+          texts.push(s);
+        } else {
+          const image = await p.uploadMediaData(path, bytes(value.base64), value.mime);
+          s.fills = s.fills.map((f: any) =>
+            f.fillImage ? { ...f, fillImage: { ...image, keepAspectRatio: true } } : f,
+          );
+        }
+      }
+    }
+  };
+  // The row's siblings of its type are the design's other example rows.
+  // A flex board draws its children from the end of the list, and ignores
+  // insertChild's index, so each copy moves to just after the row: that draws
+  // it before the row and after the copies already made.
+  const fill = async (row: any, items: Variant[]) => {
+    const parent = row.parent;
+    for (const sibling of [...parent.children])
+      if (sibling.id !== row.id && sibling.type === row.type) sibling.remove();
+    for (const item of items) {
+      const copy = row.clone();
+      copy.setParentIndex(parent.children.findIndex((c: any) => c.id === row.id) + 1);
+      await apply(copy, item);
+    }
+    row.remove();
+  };
+
   const copies: any[] = [];
   try {
-    const texts: any[] = [];
     for (const [i, variant] of args.variants.entries()) {
       // On the page itself, a copy of a nested board leaves its siblings in place.
       const copy = frame.clone();
@@ -121,22 +162,7 @@ export async function penpotRender(args: {
       p.root.appendChild(copy);
       copy.x = frame.x + (frame.width + 200) * (i + 1);
       copy.y = frame.y;
-      const layers = byPath(copy);
-      for (const [path, value] of Object.entries(variant)) {
-        const shapes = layers.get(path);
-        if (!shapes) throw new Error(`no layer ${path} in ${frame.name}`);
-        for (const s of shapes) {
-          if (value.kind === "text") {
-            s.characters = value.text;
-            texts.push(s);
-          } else {
-            const image = await p.uploadMediaData(path, bytes(value.base64), value.mime);
-            s.fills = s.fills.map((f: any) =>
-              f.fillImage ? { ...f, fillImage: { ...image, keepAspectRatio: true } } : f,
-            );
-          }
-        }
-      }
+      await apply(copy, variant);
     }
     await settle(texts);
     const settings =

@@ -1,8 +1,8 @@
 # Templates
 
 ```sh
-templates init <url> [--frame F] [--field name=layer]... [--out template.json]
-templates render template.json --data rows.csv [--on url] [--format png] [--scale 1] [--out out]
+templates init <url> [--frame F] [--field name=layer]... [--list name=row]... [--out template.json]
+templates render template.json --data rows.csv|rows.json [--on url] [--format png] [--scale 1] [--out out]
 templates check template.json [--on url]
 ```
 
@@ -62,11 +62,54 @@ letter. Two fields cannot share a name.
 }
 ```
 
+## Lists
+
+A list is a row the design repeats with different text, such as the items of an
+agenda. `--list` names the row by its path, and `--field list.name=layer` picks
+a layer inside it:
+
+```sh
+templates init '<url>' --field number=2 --field date=4 --field place=6 \
+  --list 'agenda=Frame 125/Auto Layout Vertical/Auto Layout Vertical/Auto Layout Vertical/Frame 103' \
+  --field agenda.title=9 --field agenda.by=10 --field agenda.votes=11
+```
+
+```
+  agenda       list   Frame 125/Auto Layout Vertical/Auto Layout Vertical/Auto Layout Vertical/Frame 103
+    title      text   Frame 102/Carga académica de docentes DAIMF 2024-1
+    by         text   Frame 102/Enviado por el Departamento del DAIMF
+    votes      text   Votos
+```
+
+A list field's layer is its path below the row. A layer inside the row cannot be
+a plain field, and a list field must be inside its row.
+
+The data cell of a list is an array of objects, one per row, keyed by the list's
+field names, so the data file is JSON:
+
+```json
+{
+  "number": "#14",
+  "agenda": [
+    { "title": "Estancia Académica 2024-2", "votes": "Dr. Carlos Solano" }
+  ]
+}
+```
+
+The render removes the row's siblings of the same layer type, which are the
+design's other example rows, and puts one copy of the row per item in their
+place. An item that leaves a field out or empty hides that layer.
+
+The rows stack only inside an auto layout (Figma) or flex layout (Penpot). The
+frame keeps its height unless it hugs its contents, so a longer list on a
+fixed-height frame is cut off at the bottom.
+
 ## Data
 
 `--data` is a `.csv` file with a header row, or a `.json` array of objects. Each
 row renders one file.
 
+- A list field's cell is a JSON array; see [Lists](#lists).
 - A column is a field name. A column that is not a field stops the render and
   lists the fields.
 - An empty cell keeps the design's value.

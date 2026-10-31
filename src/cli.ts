@@ -17,15 +17,17 @@ import { parseUrl } from "./url";
 const usage = `usage:
   templates pages <url> [--page P]              list pages and their frames
   templates layers <url> [--frame F]            list the frame's text and image layers
-  templates init <url> [--frame F] [--field name=layer]... [--out template.json]
-  templates render <template.json> --data rows.csv [--on url] [--format png|jpg|pdf|svg] [--scale N] [--out dir]
+  templates init <url> [--frame F] [--field name=layer]... [--list name=row]... [--out template.json]
+  templates render <template.json> --data rows.csv|rows.json [--on url] [--format png|jpg|pdf|svg] [--scale N] [--out dir]
   templates check <template.json> [--on url]    report fields whose layer is gone or changed
   templates copy <figma-url> --to <penpot-url> [--frame F]
 
 <url> is a Figma design URL or a Penpot workspace URL, open in the browser on
 CDP_URL (default http://127.0.0.1:9222). F is a frame id or name; a Figma URL
 with node-id names one. --on renders or checks another design, such as the
-Penpot copy, and finds the frame there by name.`;
+Penpot copy, and finds the frame there by name. --list names a repeating row;
+--field list.name=layer picks a layer inside it, and a JSON data cell holds
+the rows.`;
 
 const { positionals, values } = parseArgs({
   allowPositionals: true,
@@ -33,6 +35,7 @@ const { positionals, values } = parseArgs({
     frame: { type: "string" },
     page: { type: "string" },
     field: { type: "string", multiple: true, default: [] },
+    list: { type: "string", multiple: true, default: [] },
     out: { type: "string" },
     data: { type: "string" },
     on: { type: "string" },
@@ -85,11 +88,16 @@ async function init(url: string) {
   if (await Bun.file(out).exists()) throw new Error(`${out} exists; pass another --out`);
   await using backend = await open(url);
   const frame = await findFrame(backend, values.frame);
-  const fields = chooseFields(await backend.layers(frame.id), values.field!);
+  const fields = chooseFields(await backend.layers(frame.id), values.field!, values.list!);
   const template: Template = { design: url, frame: { id: frame.id, name: frame.name }, fields };
   await Bun.write(out, JSON.stringify(template, null, 2) + "\n");
   console.log(`${out}: ${frame.name}`);
-  for (const f of fields) console.log(`  ${f.name.padEnd(12)} ${f.kind.padEnd(5)}  ${f.layer}`);
+  for (const f of fields) {
+    console.log(`  ${f.name.padEnd(12)} ${f.kind.padEnd(5)}  ${f.layer}`);
+    if (f.kind === "list")
+      for (const sub of f.fields)
+        console.log(`    ${sub.name.padEnd(10)} ${sub.kind.padEnd(5)}  ${sub.layer}`);
+  }
 }
 
 async function render(templatePath: string) {
