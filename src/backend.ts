@@ -6,7 +6,8 @@
 import { listTabs, openTab, Session } from "./cdp";
 import type { Format, FrameInfo, Layer, PageInfo, Variant } from "./design";
 import { figmaFrame, figmaLayers, figmaPages, figmaRender } from "./figma/page";
-import { headless, penpotToken } from "./penpot/headless";
+import { headless } from "./penpot/headless";
+import { penpotToken } from "./penpot/rpc";
 import { penpotFrame, penpotLayers, penpotOpen, penpotPages, penpotRender } from "./penpot/page";
 import { tabMatch, type Target } from "./url";
 

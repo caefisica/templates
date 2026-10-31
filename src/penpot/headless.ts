@@ -2,12 +2,11 @@
 // file comes from `get-file`; the frame's board is fetched as transit and drawn
 // by the engine (see src/penpot/engine.ts). It needs an access token.
 
-import { homedir } from "node:os";
-import { join } from "node:path";
 import type { Backend } from "../backend";
 import type { FrameInfo, PageInfo } from "../design";
 import type { Target } from "../url";
 import { type Engine, loadEngine } from "./engine";
+import { rpc } from "./rpc";
 
 type PenpotTarget = Extract<Target, { tool: "penpot" }>;
 
@@ -30,31 +29,9 @@ type File = {
 
 const root = "00000000-0000-0000-0000-000000000000";
 
-// PENPOT_TOKEN, else the token file, else null.
-export async function penpotToken(): Promise<string | null> {
-  if (process.env.PENPOT_TOKEN) return process.env.PENPOT_TOKEN;
-  const config = process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config");
-  const file = Bun.file(join(config, "templates", "penpot-token"));
-  return (await file.exists()) ? (await file.text()).trim() : null;
-}
-
 export function headless(target: PenpotTarget, token: string): Backend {
   const auth = { authorization: `Token ${token}` };
-  const call = async (method: string, body: string, type: string) => {
-    const url = `${target.origin}/api/main/methods/${method}`;
-    const response = await fetch(url, {
-      method: "POST",
-      headers: { ...auth, "content-type": type, accept: type },
-      body,
-    });
-    if (!response.ok)
-      throw new Error(`Penpot ${method}: ${response.status} ${await response.text()}`);
-    return response;
-  };
-  const json = (method: string, params: object) =>
-    call(method, JSON.stringify(params), "application/json").then((r) => r.json());
-  const transit = (method: string, body: unknown[]) =>
-    call(method, JSON.stringify(body), "application/transit+json").then((r) => r.text());
+  const { json, transit } = rpc(target.origin, token);
 
   let file: Promise<File> | undefined;
   const getFile = (): Promise<File> => (file ??= json("get-file", { id: target.file }));

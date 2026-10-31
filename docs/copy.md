@@ -58,7 +58,7 @@ templates check template.json --on '<penpot url>'
 | `list numbers and bullets dropped`             | Penpot texts have no list style; the paragraphs lose their numbers and bullets.          |
 | `font ... not loadable, cap-height trim ...`   | Figma on this machine lacks the font, so a trimmed text keeps its box.                   |
 | `font ... not loadable, auto line height ...`  | Figma on this machine lacks the font, so an auto line height becomes 1.2.                |
-| `font missing in Penpot`                       | Add the font to the Penpot team, then copy again.                                        |
+| `font missing in Penpot`                       | Add the font with [`fonts`](fonts.md), then copy again.                                  |
 | `blend unsupported`                            | Penpot has no such blend mode; the layer blends normally.                                |
 | `linear burn blend drawn as multiply`          | CSS has no linear burn or dodge; they become multiply and screen.                        |
 | `overlay paint drawn normal`                   | A paint blends over the layer's other paints and the layers below; it is drawn normal.   |
