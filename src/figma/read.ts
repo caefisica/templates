@@ -164,12 +164,44 @@ export async function readFigma(args: { id: string }): Promise<Design> {
     }
   };
 
-  const paints = async (n: any) => {
-    if (!("fills" in n)) return [];
-    const list = n.fills === figma.mixed ? n.getStyledTextSegments(["fills"])[0].fills : n.fills;
+  // A Figma paint can blend with what lies under it: the layer's lower paints,
+  // and, when the layer passes through, the layers below. Penpot blends whole
+  // layers only. A pass-through layer whose paints share one mode takes that
+  // mode as its own. In an isolated layer a blended paint with nothing under
+  // it draws as a normal one, and over other paints it is dropped. Any other
+  // blended paint draws normal. Returns the paints to draw and the layer mode.
+  const mode = (paint: any) => paint.blendMode ?? "NORMAL";
+  const spoken = (m: string) => m.toLowerCase().replace("_", " ");
+  const unblend = (n: any, list: readonly any[]) => {
+    const shown = list.filter((paint) => paint.visible !== false);
+    const painted = shown.filter((paint) => paint.opacity !== 0);
+    const modes = new Set(painted.map(mode));
+    if (!painted.some((paint) => mode(paint) !== "NORMAL")) return { fills: shown };
+    if (n.blendMode !== "PASS_THROUGH") {
+      const fills = shown.filter((paint) => {
+        if (mode(paint) === "NORMAL" || painted.indexOf(paint) <= 0) return true;
+        warnings.add(`${n.name}: ${spoken(mode(paint))} paint over other paints dropped`);
+        return false;
+      });
+      return { fills };
+    }
+    if (modes.size === 1)
+      return { fills: shown, blend: spoken(painted[0].blendMode).replace(" ", "-") };
+    for (const m of modes)
+      if (m !== "NORMAL") warnings.add(`${n.name}: ${spoken(m)} paint drawn normal`);
+    return { fills: shown };
+  };
+
+  const fillList = (n: any) =>
+    !("fills" in n)
+      ? []
+      : n.fills === figma.mixed
+        ? n.getStyledTextSegments(["fills"])[0].fills
+        : n.fills;
+
+  const paints = async (n: any, list: readonly any[]) => {
     const out = [];
     for (const [index, paint] of list.entries()) {
-      if (paint.visible === false) continue;
       const simple = paint.type === "IMAGE" ? undefined : flat(paint);
       if (simple) out.push(simple);
       else if (paint.type === "IMAGE" && paint.scaleMode === "FILL")
@@ -197,11 +229,15 @@ export async function readFigma(args: { id: string }): Promise<Design> {
     if (!("strokes" in n) || n.strokeWeight === figma.mixed) return [];
     const align =
       n.strokeAlign === "INSIDE" ? "inner" : n.strokeAlign === "OUTSIDE" ? "outer" : "center";
+    // Penpot draws a dash pattern of its own; a dash no longer than the
+    // stroke is wide reads as dots.
+    const dash = n.dashPattern ?? [];
+    const style = !dash.length ? "solid" : dash[0] <= n.strokeWeight ? "dotted" : "dashed";
     const out = [];
     for (const s of n.strokes) {
       if (s.visible === false) continue;
       const paint = s.type === "IMAGE" ? undefined : flat(s);
-      if (paint) out.push({ paint, width: n.strokeWeight, align });
+      if (paint) out.push({ paint, width: n.strokeWeight, align, style });
       else warnings.add(`${n.name}: ${s.type.toLowerCase()} stroke dropped`);
     }
     return out;
@@ -293,9 +329,33 @@ export async function readFigma(args: { id: string }): Promise<Design> {
     }
   };
 
+  // Figma's auto line height is the font's own ascent and descent, which
+  // Penpot does not know, so a one-letter copy measures it as a ratio.
+  const autoLine = async (n: any) => {
+    const fonts = n.getRangeAllFontNames(0, n.characters.length);
+    try {
+      await Promise.all(fonts.map((f: any) => figma.loadFontAsync(f)));
+    } catch {
+      warnings.add(
+        `${n.name}: font ${fonts[0].family} not loadable, auto line height taken as 1.2`,
+      );
+      return 1.2;
+    }
+    const copy = n.clone();
+    try {
+      figma.currentPage.appendChild(copy);
+      copy.leadingTrim = "NONE";
+      copy.textAutoResize = "WIDTH_AND_HEIGHT";
+      copy.characters = "H";
+      return copy.height / copy.getRangeFontSize(0, 1);
+    } finally {
+      copy.remove();
+    }
+  };
+
   // Figma calls a text's font mixed when this machine lacks the font, even
   // with one style, so the styles come from the segments, which name it.
-  const text = (n: any) => {
+  const text = async (n: any) => {
     const fields = ["fontName", "fontSize", "fontWeight", "fills", "lineHeight", "letterSpacing"];
     const segments = n.characters.length
       ? n.getStyledTextSegments(fields)
@@ -307,10 +367,7 @@ export async function readFigma(args: { id: string }): Promise<Design> {
       weight: s.fontWeight,
       italic: /italic/i.test(s.fontName.style),
       size: round(s.fontSize),
-      fills: s.fills
-        .filter((f: any) => f.visible !== false)
-        .map(flat)
-        .filter(Boolean),
+      fills: unblend(n, s.fills).fills.map(flat).filter(Boolean),
     }));
     const [{ lineHeight: line, letterSpacing: letter, fontSize: size }] = segments;
     const same = (field: string) =>
@@ -330,7 +387,7 @@ export async function readFigma(args: { id: string }): Promise<Design> {
           ? line.value / 100
           : line.unit === "PIXELS"
             ? line.value / size
-            : 1.2,
+            : await autoLine(n),
       ),
       letterSpacing: round(letter.unit === "PERCENT" ? (letter.value / 100) * size : letter.value),
       case: ({ UPPER: "upper", LOWER: "lower", TITLE: "title" } as any)[n.textCase] ?? "none",
@@ -359,20 +416,69 @@ export async function readFigma(args: { id: string }): Promise<Design> {
     return near;
   };
 
+  // Penpot's clip isolates a board, so a layer inside it blends with nothing
+  // outside the board, where a Figma frame clips without isolating. A clip
+  // that cuts nothing, with every painted descendant inside the box and clear
+  // of its rounded corners, is left off when a blend needs what lies below.
+  const blends = (d: any) =>
+    (d.blendMode && !["PASS_THROUGH", "NORMAL"].includes(d.blendMode)) ||
+    (Array.isArray(d.fills) && d.fills.some((paint: any) => mode(paint) !== "NORMAL"));
+  const clips = (n: any) => {
+    if (!n.clipsContent) return false;
+    if (!n.findOne?.(blends)) return true;
+    const box = n.absoluteBoundingBox;
+    const [tl, tr, br, bl] = radii(n);
+    const painted = n.findAll(
+      (d: any) =>
+        d.visible &&
+        (!d.children?.length ||
+          (Array.isArray(d.fills) && d.fills.some((p: any) => p.visible !== false))),
+    );
+    return painted.some((d: any) => {
+      // Render bounds are already cut by the clips above, so they cannot show overflow.
+      const b = d.absoluteBoundingBox;
+      if (!b) return false;
+      const [left, top, right, bottom] = [
+        b.x - box.x,
+        b.y - box.y,
+        b.x + b.width - box.x,
+        b.y + b.height - box.y,
+      ];
+      if (left < -0.5 || top < -0.5 || right > box.width + 0.5 || bottom > box.height + 0.5)
+        return true;
+      const inCorner = (r: number, x0: number, y0: number) =>
+        r > 0 && left < x0 + r && right > x0 && top < y0 + r && bottom > y0;
+      return (
+        inCorner(tl, 0, 0) ||
+        inCorner(tr, box.width - tr, 0) ||
+        inCorner(br, box.width - br, box.height - br) ||
+        inCorner(bl, 0, box.height - bl)
+      );
+    });
+  };
+
+  const radii = (n: any): [number, number, number, number] => {
+    if (n.cornerRadius === figma.mixed)
+      return [n.topLeftRadius, n.topRightRadius, n.bottomRightRadius, n.bottomLeftRadius];
+    const r = typeof n.cornerRadius === "number" ? n.cornerRadius : 0;
+    return [r, r, r, r];
+  };
+
   const read = async (n: any, parent: any): Promise<any> => {
+    // A vector's SVG carries its own paints.
+    const vector = vectorTypes.includes(n.type);
+    const unblended = vector ? { fills: [] } : unblend(n, fillList(n));
     const base: any = {
       id: n.id,
       name: n.name,
       visible: n.visible,
       ...place(n),
       opacity: n.opacity ?? 1,
-      blend: blend(n),
-      // A vector's SVG carries its own paints.
-      ...(vectorTypes.includes(n.type)
-        ? { fills: [], strokes: [] }
-        : { fills: await paints(n), strokes: strokes(n) }),
+      blend: unblended.blend ?? blend(n),
+      fills: await paints(n, unblended.fills),
+      strokes: vector ? [] : strokes(n),
       ...effects(n),
-      radius: typeof n.cornerRadius === "number" ? n.cornerRadius : 0,
+      radius: radii(n),
       bleed: [0, 0, 0, 0],
     };
     if (parent && parent.layoutMode && parent.layoutMode !== "NONE")
@@ -408,12 +514,38 @@ export async function readFigma(args: { id: string }): Promise<Design> {
         y: base.y - top,
         h: round(base.h + top + bottom),
         bleed: [top, 0, bottom, 0],
-        text: text(n),
+        text: await text(n),
       };
     }
     if (n.type === "RECTANGLE") return { ...base, kind: "rect" };
     if (n.type === "ELLIPSE") return { ...base, kind: "ellipse" };
+    // Penpot draws a shadow through a filter, which isolates the layer as a
+    // clip does, so a shadow gives way to the blends inside.
+    if (base.shadows.length && (unblended.blend || n.findOne?.(blends))) {
+      warnings.add(`${n.name}: shadow dropped so the blends inside reach the layers below`);
+      base.shadows = [];
+    }
     const children = [];
+    // A layer mode on a frame would blend its children too, so the frame's
+    // paints move to a backing rectangle that takes the mode.
+    if (unblended.blend && n.children?.length) {
+      children.push({
+        ...base,
+        id: `${n.id}-paint`,
+        name: `${n.name} paint`,
+        visible: true,
+        opacity: 1,
+        strokes: [],
+        shadows: [],
+        blur: 0,
+        child:
+          n.layoutMode && n.layoutMode !== "NONE"
+            ? { h: "fixed", v: "fixed", absolute: true }
+            : undefined,
+        kind: "rect",
+      });
+      Object.assign(base, { blend: blend(n), fills: [] });
+    }
     for (const child of n.children ?? []) children.push(await read(child, n));
     if (n.type === "GROUP")
       return { ...base, kind: "group", mask: n.children.some((c: any) => c.isMask), children };
@@ -435,7 +567,7 @@ export async function readFigma(args: { id: string }): Promise<Design> {
                 : [n.counterAxisSizingMode === "AUTO", n.primaryAxisSizingMode === "AUTO"],
           }
         : undefined;
-    return { ...base, kind: "frame", clip: n.clipsContent, layout, children };
+    return { ...base, kind: "frame", clip: clips(n), layout, children };
   };
 
   return {

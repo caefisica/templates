@@ -88,6 +88,23 @@ export async function writePenpot(args: {
     };
   };
 
+  // Penpot counts a line's trailing space against the width, where Figma lets
+  // it hang, so a word that fits in Figma wraps in Penpot. A wrapping text
+  // gets a space's width more on the side its alignment leaves free, and the
+  // layout flows the box without it.
+  const roomy = (node: any) => {
+    if (node.kind !== "text" || node.text.grow === "auto-width") return node;
+    const room = 0.35 * Math.max(node.text.size, ...node.text.runs.map((r: any) => r.size));
+    const left = node.text.align === "right" ? room : node.text.align === "center" ? room / 2 : 0;
+    const [top, right, bottom, start] = node.bleed;
+    return {
+      ...node,
+      x: node.x - left,
+      w: node.w + room,
+      bleed: [top, right + room - left, bottom, start + left],
+    };
+  };
+
   const create = async (node: any, frame: Frame): Promise<any> => {
     const at = placeIn(node, frame);
     let shape: any;
@@ -104,7 +121,7 @@ export async function writePenpot(args: {
       p.root.appendChild(shape);
     } else if (node.kind === "group") {
       const children = [];
-      for (const child of node.children) children.push(await create(child, at.inner));
+      for (const child of node.children.map(roomy)) children.push(await create(child, at.inner));
       shape = p.group(children);
       if (node.mask) shape.makeMask();
     }
@@ -123,7 +140,7 @@ export async function writePenpot(args: {
         strokeOpacity: s.paint.opacity,
         strokeWidth: s.width,
         strokeAlignment: s.align,
-        strokeStyle: "solid",
+        strokeStyle: s.style,
       }));
     if (node.shadows.length)
       shape.shadows = node.shadows.map((s: any) => ({
@@ -136,7 +153,16 @@ export async function writePenpot(args: {
       }));
     // Penpot's blur value is the Gaussian deviation its SVG export uses.
     if (node.blur) shape.blur = { value: node.blur, hidden: false };
-    if (node.radius) shape.borderRadius = node.radius;
+    const [tl, tr, br, bl] = node.radius;
+    if (tl === tr && tr === br && br === bl) {
+      if (tl) shape.borderRadius = tl;
+    } else
+      [
+        shape.borderRadiusTopLeft,
+        shape.borderRadiusTopRight,
+        shape.borderRadiusBottomRight,
+        shape.borderRadiusBottomLeft,
+      ] = node.radius;
     shape.opacity = node.opacity;
     try {
       shape.blendMode = node.blend;
@@ -189,7 +215,7 @@ export async function writePenpot(args: {
       // lowest, so it takes children last first to keep Figma's stacking. A
       // flex board draws index 0 highest and flows from the highest index, so
       // it takes children in Figma order and both flow and stacking hold.
-      const children = node.layout ? node.children : [...node.children].reverse();
+      const children = (node.layout ? node.children : [...node.children].reverse()).map(roomy);
       for (const child of children) {
         const made = await create(child, at.inner);
         shape.appendChild(made);

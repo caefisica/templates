@@ -26,6 +26,7 @@ export type Stroke = {
   paint: Exclude<Paint, { kind: "image" }>;
   width: number;
   align: "inner" | "center" | "outer";
+  style: "solid" | "dashed" | "dotted";
 };
 
 export type Shadow = {
@@ -96,7 +97,8 @@ type Base = {
   shadows: Shadow[];
   // Layer blur as a Gaussian standard deviation in pixels, 0 for none.
   blur: number;
-  radius: number;
+  // Corner radii as top-left, top-right, bottom-right and bottom-left.
+  radius: [number, number, number, number];
   // How far the box reaches past the box a layout flows, as top, right,
   // bottom and left. A cap-height trimmed text flows its trimmed box, and a
   // vector flows its node box while the box holds what it draws.

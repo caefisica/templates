@@ -44,21 +44,37 @@ templates check template.json --on '<penpot url>'
 
 `copy` prints a warning for each thing it changed or dropped:
 
-| Warning                                        | Meaning                                                                          |
-| ---------------------------------------------- | -------------------------------------------------------------------------------- |
-| `crop image baked to a picture`                | A cropped or tiled image became a PNG of the layer's box at 2×.                  |
-| `gradient_angular paint baked to a picture`    | Penpot has no angular or diamond gradient; the fill became a PNG at 2×.          |
-| `gradient_angular paint dropped`               | The same fill on a text is not copied.                                           |
-| `image stroke dropped`                         | Penpot strokes take no image, angular or diamond paint.                          |
-| `background_blur dropped`                      | Penpot has no background blur.                                                   |
-| `progressive blur dropped`                     | Penpot blurs a layer evenly only.                                                |
-| `vector draws nothing, copied as an empty...`  | The vector has no visible paint, so it became an empty rectangle.                |
-| `mixed line height or letter spacing flatt...` | A text whose runs differ in line height or letter spacing takes the first run's. |
-| `paragraph indent dropped`                     | Penpot has no first-line indent; the first line starts at the margin.            |
-| `font ... not loadable, cap-height trim ...`   | Figma on this machine lacks the font, so a trimmed text keeps its box.           |
-| `font missing in Penpot`                       | Add the font to the Penpot team, then copy again.                                |
-| `blend unsupported`                            | Penpot has no such blend mode; the layer blends normally.                        |
-| `linear burn blend drawn as multiply`          | CSS has no linear burn or dodge; they become multiply and screen.                |
+| Warning                                        | Meaning                                                                                  |
+| ---------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `crop image baked to a picture`                | A cropped or tiled image became a PNG of the layer's box at 2×.                          |
+| `gradient_angular paint baked to a picture`    | Penpot has no angular or diamond gradient; the fill became a PNG at 2×.                  |
+| `gradient_angular paint dropped`               | The same fill on a text is not copied.                                                   |
+| `image stroke dropped`                         | Penpot strokes take no image, angular or diamond paint.                                  |
+| `background_blur dropped`                      | Penpot has no background blur.                                                           |
+| `progressive blur dropped`                     | Penpot blurs a layer evenly only.                                                        |
+| `vector draws nothing, copied as an empty...`  | The vector has no visible paint, so it became an empty rectangle.                        |
+| `mixed line height or letter spacing flatt...` | A text whose runs differ in line height or letter spacing takes the first run's.         |
+| `paragraph indent dropped`                     | Penpot has no first-line indent; the first line starts at the margin.                    |
+| `font ... not loadable, cap-height trim ...`   | Figma on this machine lacks the font, so a trimmed text keeps its box.                   |
+| `font ... not loadable, auto line height ...`  | Figma on this machine lacks the font, so an auto line height becomes 1.2.                |
+| `font missing in Penpot`                       | Add the font to the Penpot team, then copy again.                                        |
+| `blend unsupported`                            | Penpot has no such blend mode; the layer blends normally.                                |
+| `linear burn blend drawn as multiply`          | CSS has no linear burn or dodge; they become multiply and screen.                        |
+| `overlay paint drawn normal`                   | A paint blends over the layer's other paints and the layers below; it is drawn normal.   |
+| `overlay paint over other paints dropped`      | In a layer that does not pass through, a paint that blends over other paints is dropped. |
+| `shadow dropped so the blends inside reach...` | Penpot's shadow isolates a layer; the shadow goes so blends inside see what is below.    |
+
+## Blends
+
+Figma can give a single paint its own blend mode. Penpot blends whole layers.
+When every blended paint on a pass-through layer shares one mode, the layer
+takes that mode. A frame hands its paints to a rectangle behind its children, so
+the children do not blend.
+
+Penpot isolates a board that clips or casts a shadow: a layer inside it blends
+with nothing outside the board. Figma's frames do not isolate. A frame that
+holds a blend keeps its clip only when the clip cuts something, and it loses its
+shadow.
 
 ## Layout boxes
 
