@@ -4,7 +4,7 @@
 // tab, logged in and reached over CDP (see src/cdp.ts).
 
 import { listTabs, openTab, Session } from "./cdp";
-import type { Format, FrameInfo, Layer, PageInfo, Variant } from "./design";
+import type { Format, FrameInfo, Layer, PageInfo, Rendered, Variant } from "./design";
 import { figmaFrame, figmaLayers, figmaPages, figmaRender } from "./figma/page";
 import { headless } from "./penpot/headless";
 import { penpotToken } from "./penpot/rpc";
@@ -24,7 +24,7 @@ export type Backend = {
     variants: Variant[],
     format: Format,
     scale: number,
-  ): AsyncGenerator<Uint8Array>;
+  ): AsyncGenerator<Rendered>;
   close(): void;
 };
 
@@ -78,7 +78,8 @@ export async function connectTab(target: Target): Promise<TabBackend> {
           format,
           scale,
         });
-        for (const b of encoded) yield Uint8Array.fromBase64(b);
+        for (const { base64, overflow } of encoded)
+          yield { bytes: Uint8Array.fromBase64(base64), overflow };
       }
     },
     close: () => session.close(),

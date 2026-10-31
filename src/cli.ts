@@ -129,10 +129,17 @@ async function render(templatePath: string) {
   await using backend = await open(values.on ?? template.design);
   const frame = await templateFrame(backend, template);
   let i = 0;
-  for await (const bytes of backend.render(frame, variants, format, Number(values.scale))) {
+  for await (const { bytes, overflow } of backend.render(
+    frame,
+    variants,
+    format,
+    Number(values.scale),
+  )) {
     const path = join(outDir, `${plans[i++]!.file}.${format}`);
     await Bun.write(path, bytes);
     console.log(`${path}  ${Math.round(bytes.length / 1024)} KB`);
+    for (const o of overflow)
+      console.log(`  warning: ${o.path} runs ${o.px} px past the ${o.edge} edge`);
   }
 }
 

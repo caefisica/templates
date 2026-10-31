@@ -2,7 +2,7 @@
 // `ɵcontext`, the plugin API object the workspace exposes on the page. Each
 // must not reference anything outside its own body.
 
-import type { Format, FrameInfo, Layer, PageInfo, Variant } from "../design";
+import type { Format, FrameInfo, Layer, Overflow, PageInfo, Variant } from "../design";
 
 export async function penpotPages(): Promise<PageInfo[]> {
   const p = (globalThis as any)["ɵcontext"];
@@ -83,13 +83,14 @@ export async function penpotLayers(args: { frame: string }): Promise<Layer[]> {
 
 // Renders all variants at once from clones of the frame, which are removed
 // afterwards. Penpot exports on its server, so the exports run in parallel.
-// Returns the exports as base64, in variant order.
+// Returns the exports as base64, in variant order, each with the texts it
+// pushed past an edge of the frame (see Overflow).
 export async function penpotRender(args: {
   frame: string;
   variants: Variant[];
   format: Format;
   scale: number;
-}): Promise<string[]> {
+}): Promise<{ base64: string; overflow: Overflow[] }[]> {
   const p = (globalThis as any)["ɵcontext"];
   const frame = p.currentPage.getShapeById(args.frame);
   if (!frame) throw new Error(`no frame ${args.frame} on the open page`);
@@ -121,6 +122,46 @@ export async function penpotRender(args: {
       if (now === last) return;
       last = now;
     }
+  };
+
+  // How far each visible text runs past each edge of `root`, the furthest of
+  // the texts at one path. A copy of a list row shares its row's path.
+  const sides = ["left", "right", "top", "bottom"] as const;
+  const past = (root: any) => {
+    const found = new Map<string, Record<string, number>>();
+    const visit = (s: any, path: string) => {
+      if (s.hidden) return;
+      if (s.type === "text") {
+        const now = {
+          left: root.x - s.x,
+          right: s.x + s.width - root.x - root.width,
+          top: root.y - s.y,
+          bottom: s.y + s.height - root.y - root.height,
+        };
+        const was = found.get(path);
+        for (const side of sides) now[side] = Math.max(now[side], was?.[side] ?? -Infinity);
+        found.set(path, now);
+      }
+      for (const child of s.children ?? []) visit(child, `${path}/${child.name}`);
+    };
+    for (const child of root.children) visit(child, child.name);
+    return found;
+  };
+  const design = past(frame);
+  const overflow = (copy: any): Overflow[] => {
+    if (!frame.clipContent) return [];
+    const found: Overflow[] = [];
+    for (const [path, now] of past(copy)) {
+      let worst: Overflow | undefined;
+      for (const edge of sides) {
+        const px = now[edge]!;
+        const was = Math.max(0, design.get(path)?.[edge] ?? 0);
+        if (px > 0.5 && px - was > 0.5 && px > (worst?.px ?? 0))
+          worst = { path, edge, px: Math.round(px) };
+      }
+      if (worst) found.push(worst);
+    }
+    return found;
   };
 
   const texts: any[] = [];
@@ -180,7 +221,7 @@ export async function penpotRender(args: {
         ? { type: args.format === "jpg" ? "jpeg" : "png", scale: args.scale }
         : { type: args.format };
     const exports = await Promise.all(copies.map((copy) => copy.export(settings)));
-    return exports.map(base64);
+    return exports.map((data, i) => ({ base64: base64(data), overflow: overflow(copies[i]) }));
   } finally {
     for (const copy of copies) copy.remove();
   }
